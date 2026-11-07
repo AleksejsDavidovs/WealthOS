@@ -15,6 +15,8 @@ final class AppModel {
     let loadError: String?
     private(set) var demoContainer: ModelContainer?
     var selectedTab: AppTab = .home
+    /// Set by Quick Add controls; MainTabView presents the transaction editor.
+    var quickAddRequest: TransactionEditorRequest?
 
     init() {
         do {

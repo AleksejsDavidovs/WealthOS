@@ -124,7 +124,7 @@ struct OnboardingView: View {
                 Image(systemName: lock.biometrySymbol).font(.system(size: 64)).foregroundStyle(Theme.accent)
                 Toggle("Require \(lock.biometryName)", isOn: $enableLock).card()
                 if let message = lock.errorMessage {
-                    Text(message).font(.footnote).foregroundStyle(.orange)
+                    Text(message).font(.footnote).foregroundStyle(Theme.warning)
                 }
             }
         }

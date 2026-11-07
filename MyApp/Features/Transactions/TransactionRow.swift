@@ -4,6 +4,8 @@ struct TransactionRow: View {
     let transaction: TransactionRecord
     let engine: FinanceEngine
     let categories: [TransactionCategory]
+    /// Lists grouped by day already show the date in the section header.
+    var showsDate = true
 
     private var category: TransactionCategory? {
         transaction.categoryID.flatMap { id in categories.first { $0.id == id } }
@@ -22,7 +24,7 @@ struct TransactionRow: View {
                         Image(systemName: "repeat").accessibilityLabel("Recurring")
                     }
                     if isScheduled {
-                        Text("Scheduled").foregroundStyle(.orange)
+                        Text("Scheduled").foregroundStyle(Theme.warning)
                     }
                     Text(subtitle).lineLimit(1)
                 }
@@ -63,10 +65,10 @@ struct TransactionRow: View {
     }
 
     private var subtitle: String {
-        let date = transaction.date.formatted(date: .abbreviated, time: .omitted)
+        let date = showsDate ? transaction.date.formatted(.dateTime.day().month(.abbreviated)) : nil
         switch transaction.kind {
         case .transfer:
-            return "\(account?.name ?? "?") → \(destination?.name ?? "?") · \(date)"
+            return ["\(account?.name ?? "?") → \(destination?.name ?? "?")", date].compactMap { $0 }.joined(separator: " · ")
         default:
             let categoryName = transaction.note.isEmpty ? nil : category?.name
             return [categoryName, account?.name, date].compactMap { $0 }.joined(separator: " · ")
@@ -112,7 +114,7 @@ struct AccountRow: View {
                     .font(.body.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(account.kind.isLiability ? Theme.negative : (balance < 0 ? Theme.negative : .primary))
                 if account.kind.isLiability {
-                    Text("owed").font(.caption2).foregroundStyle(.secondary)
+                    Text("owed").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)

@@ -30,6 +30,7 @@ struct HomeView: View {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
                         NetWorthHeroCard(summary: engine.summary, snapshots: baseSnapshots, code: baseCurrency)
+                        if !engine.accounts.isEmpty { QuickActionsRow() }
                         if !engine.summary.missingRateCurrencies.isEmpty {
                             InfoBanner(text: "Missing exchange rate for \(engine.summary.missingRateCurrencies.sorted().joined(separator: ", ")). Those balances are excluded from totals until you add a rate in Settings.",
                                        symbol: "exclamationmark.triangle.fill", tint: .orange)
@@ -43,7 +44,7 @@ struct HomeView: View {
                         goalsSection
                     }
                     .padding(.horizontal)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, 20)
                 }
                 .screenBackground()
                 .onAppear { DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency) }
@@ -51,13 +52,15 @@ struct HomeView: View {
             .navigationTitle("WealthOS")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    QuickAddToolbarMenu()
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: {
                         Image(systemName: "gearshape")
                     }
                     .accessibilityLabel("Settings")
                 }
             }
-            .overlay(alignment: .bottomTrailing) { quickAddButton }
             .sheet(item: $editorRequest) { request in
                 TransactionEditorView(request: request)
             }
@@ -69,27 +72,6 @@ struct HomeView: View {
 
     private var baseSnapshots: [NetWorthSnapshot] {
         snapshots.filter { $0.currencyCode == baseCurrency }
-    }
-
-    private var quickAddButton: some View {
-        Menu {
-            Button { editorRequest = .init(kind: .expense) } label: { Label("Expense", systemImage: TransactionKind.expense.symbol) }
-            Button { editorRequest = .init(kind: .income) } label: { Label("Income", systemImage: TransactionKind.income.symbol) }
-            Button { editorRequest = .init(kind: .transfer) } label: { Label("Transfer", systemImage: TransactionKind.transfer.symbol) }
-        } label: {
-            Label("Quick Add", systemImage: "plus")
-                .font(.headline)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
-                .glassCapsule(tint: Theme.accent)
-        } primaryAction: {
-            editorRequest = .init(kind: .expense)
-        }
-        .padding(.trailing, 20)
-        .padding(.bottom, 12)
-        .accessibilityHint("Adds an expense. Long press for income or transfer.")
-        .sensoryFeedback(.impact(weight: .medium), trigger: editorRequest?.id)
     }
 
     private func breakdownGrid(_ summary: NetWorthSummary) -> some View {
@@ -197,18 +179,19 @@ struct NetWorthHeroCard: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.white.opacity(0.8))
             Text(MoneyFormat.string(summary.netWorth, code: code))
-                .font(.system(size: 42, weight: .bold, design: .rounded))
+                .scaledFont(40)
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .minimumScaleFactor(0.5)
+                .minimumScaleFactor(0.6)
                 .contentTransition(.numericText(value: summary.netWorth.doubleValue))
                 .animation(.spring, value: summary.netWorth)
             changeLabel
-            HStack(spacing: 18) {
-                heroStat("Assets", summary.totalAssets)
-                heroStat("Liabilities", summary.liabilities)
-            }
+            MetricRow(metrics: [
+                Metric(title: "Assets", value: MoneyFormat.string(summary.totalAssets, code: code, fractionDigits: 0)),
+                Metric(title: "Liabilities", value: MoneyFormat.string(summary.liabilities, code: code, fractionDigits: 0)),
+                Metric(title: "Investments", value: MoneyFormat.string(summary.investments, code: code, fractionDigits: 0)),
+            ], onDark: true)
             .padding(.top, 4)
         }
         .padding(22)
@@ -224,14 +207,6 @@ struct NetWorthHeroCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func heroStat(_ title: String, _ value: Decimal) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(.white.opacity(0.7))
-            Text(MoneyFormat.string(value, code: code, fractionDigits: 0))
-                .font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
-        }
-    }
-
     /// Compares with the latest recorded snapshot before the start of this month.
     @ViewBuilder
     private var changeLabel: some View {
@@ -244,7 +219,7 @@ struct NetWorthHeroCard: View {
                 Text(MoneyFormat.string(change, code: code, showSign: true))
                 if let fraction { Text("(\(MoneyFormat.percent(fraction, showSign: true)))") }
                 Text("vs. \(previous.date.formatted(.dateTime.month(.abbreviated).day()))")
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.78))
             }
             .font(.footnote.weight(.semibold))
             .monospacedDigit()
@@ -253,7 +228,7 @@ struct NetWorthHeroCard: View {
             .foregroundStyle(change >= 0 ? Color(red: 0.6, green: 1, blue: 0.75) : Color(red: 1, green: 0.7, blue: 0.7))
         } else {
             Text("Change vs. last month appears once a previous month is recorded.")
-                .font(.footnote).foregroundStyle(.white.opacity(0.7))
+                .font(.footnote).foregroundStyle(.white.opacity(0.78))
         }
     }
 }
@@ -368,9 +343,9 @@ struct NetWorthChartCard: View {
 
                 HStack(spacing: 14) {
                     Label("Auto-recorded", systemImage: "circle.fill").foregroundStyle(Theme.accent)
-                    Label("Manual", systemImage: "diamond.fill").foregroundStyle(.orange)
+                    Label("Manual", systemImage: "diamond.fill").foregroundStyle(Theme.warning)
                 }
-                .font(.caption2)
+                .font(.caption)
             }
         }
         .card()
@@ -415,7 +390,7 @@ struct MonthlyFlowCard: View {
                 .frame(height: 8)
                 .animation(.spring, value: flow.savingsRate)
                 Text("Transfers and investment purchases are not counted as expenses.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .card()
@@ -426,8 +401,8 @@ struct MonthlyFlowCard: View {
         VStack(spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MoneyFormat.string(value, code: code, fractionDigits: 0))
-                .font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color)
-                .lineLimit(1).minimumScaleFactor(0.6)
+                .font(.headline).monospacedDigit().foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
     }

@@ -82,14 +82,14 @@ struct AccountDetailView: View {
                         Text(account.kind.isLiability ? "Amount Owed" : "Current Balance")
                             .font(.subheadline).foregroundStyle(.secondary)
                         MoneyText(amount: account.kind.isLiability ? -balance : balance, code: account.currencyCode)
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .scaledFont(34)
                         if account.currencyCode != baseCurrency {
                             if let converted = engine.balanceInBase(of: account) {
                                 Text("≈ \(MoneyFormat.string(account.kind.isLiability ? -converted : converted, code: baseCurrency)) at your manual rate")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else {
                                 Text("No exchange rate for \(account.currencyCode) — excluded from totals.")
-                                    .font(.caption).foregroundStyle(.orange)
+                                    .font(.caption).foregroundStyle(Theme.warning)
                             }
                         }
                         if account.isArchived {

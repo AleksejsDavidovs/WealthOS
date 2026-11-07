@@ -78,6 +78,42 @@ struct StatTile: View {
     }
 }
 
+struct Metric: Identifiable {
+    let id = UUID()
+    let title: String
+    let value: String
+    var color: Color?
+}
+
+/// Evenly spaced label/value pairs used in cards and hero headers.
+struct MetricRow: View {
+    let metrics: [Metric]
+    var onDark = false
+    var valueFont: Font = .subheadline.weight(.semibold)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(metrics) { metric in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(metric.title)
+                        .font(.caption)
+                        .foregroundStyle(onDark ? Color.white.opacity(0.78) : Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Text(metric.value)
+                        .font(valueFont)
+                        .monospacedDigit()
+                        .foregroundStyle(metric.color ?? (onDark ? Color.white : Color.primary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
 struct IconBadge: View {
     let symbol: String
     let color: Color
@@ -129,13 +165,13 @@ struct InfoBanner: View {
 
     var body: some View {
         Label {
-            Text(text).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(text).font(.footnote).foregroundStyle(.primary.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: symbol).foregroundStyle(tint)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: Theme.smallCornerRadius, style: .continuous))
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.smallCornerRadius, style: .continuous))
     }
 }
 
@@ -149,8 +185,8 @@ struct EmptyStateCard: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 36, weight: .medium))
-                .foregroundStyle(.tint)
+                .font(.largeTitle.weight(.medium))
+                .foregroundStyle(Theme.accent)
                 .symbolRenderingMode(.hierarchical)
                 .accessibilityHidden(true)
             Text(title).font(.headline)

@@ -59,32 +59,33 @@ struct InvestmentsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Portfolio Value").font(.subheadline).foregroundStyle(.secondary)
                 MoneyText(amount: value, code: baseCurrency)
-                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .scaledFont(34)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 HStack(spacing: 6) {
                     Text(MoneyFormat.string(unrealized, code: baseCurrency, showSign: true))
-                    if let fraction { Text("(\(MoneyFormat.percent(fraction, showSign: true)))") }
-                    Text("unrealized").foregroundStyle(.secondary)
+                    if let fraction {
+                        Text(MoneyFormat.percent(fraction, showSign: true))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Theme.signColor(unrealized).opacity(0.14), in: Capsule())
+                    }
+                    Text("unrealized").font(.subheadline).foregroundStyle(.secondary)
                 }
                 .font(.subheadline.weight(.semibold)).monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .foregroundStyle(Theme.signColor(unrealized))
             }
             Divider()
-            HStack {
-                metric("Cost Basis", MoneyFormat.string(cost, code: baseCurrency, fractionDigits: 0))
-                metric("Realized P/L", MoneyFormat.string(engine.portfolioRealized, code: baseCurrency, showSign: true, fractionDigits: 0))
-                metric("Account Cash", MoneyFormat.string(engine.summary.investmentAccounts, code: baseCurrency, fractionDigits: 0))
-            }
+            MetricRow(metrics: [
+                Metric(title: "Cost basis", value: MoneyFormat.string(cost, code: baseCurrency, fractionDigits: 0)),
+                Metric(title: "Realized P/L", value: MoneyFormat.string(engine.portfolioRealized, code: baseCurrency, showSign: true, fractionDigits: 0),
+                       color: Theme.signColor(engine.portfolioRealized)),
+                Metric(title: "Uninvested cash", value: MoneyFormat.string(engine.summary.investmentAccounts, code: baseCurrency, fractionDigits: 0)),
+            ])
         }
         .card()
         .accessibilityElement(children: .combine)
-    }
-
-    private func metric(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func allocationCard(_ engine: FinanceEngine) -> some View {
@@ -107,29 +108,33 @@ struct InvestmentsView: View {
                     .chartBackground { _ in
                         VStack(spacing: 0) {
                             if let selected, let item = data.first(where: { $0.assetClass == selected }), total > 0 {
-                                Text(selected.title).font(.caption2).foregroundStyle(.secondary)
+                                Text(selected.title).font(.caption).foregroundStyle(.secondary)
                                 Text(MoneyFormat.percent(item.value / total, fractionDigits: 0)).font(.headline)
                             } else {
                                 Image(systemName: "chart.pie.fill").foregroundStyle(.secondary)
                             }
                         }
                     }
-                    .frame(width: 140, height: 140)
+                    .frame(width: 130, height: 130)
                     .accessibilityLabel("Asset allocation chart")
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
                         ForEach(data, id: \.assetClass) { item in
                             HStack(spacing: 8) {
                                 Circle().fill(Theme.color(named: item.assetClass.colorName)).frame(width: 10, height: 10)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(item.assetClass.title).font(.caption.weight(.medium))
-                                    Text(total > 0 ? MoneyFormat.percent(item.value / total) : "—")
-                                        .font(.caption2).foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.assetClass.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                                    Text(MoneyFormat.string(item.value, code: baseCurrency, fractionDigits: 0))
+                                        .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                                 }
+                                Spacer(minLength: 4)
+                                Text(total > 0 ? MoneyFormat.percent(item.value / total, fractionDigits: 0) : "—")
+                                    .font(.subheadline.weight(.semibold)).monospacedDigit()
                             }
                             .accessibilityElement(children: .combine)
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -210,7 +215,7 @@ struct HoldingRow: View {
                     Text(position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol)
                         .font(.body.weight(.semibold))
                     if isStale {
-                        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange).font(.caption)
+                        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(Theme.warning).font(.caption)
                             .accessibilityLabel("Price may be outdated")
                     }
                 }

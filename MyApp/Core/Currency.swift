@@ -76,12 +76,21 @@ nonisolated enum MoneyFormat {
     }
 
     /// Short form for chart axes and dense layouts, e.g. "€12.5K", "-€1.2M".
+    /// Places the currency symbol where the current locale puts it ("€12K" vs "12 тыс. €").
     static func compact(_ amount: Double, code: String) -> String {
-        let symbol = Currencies.symbol(for: code)
+        let reference = formatter(code: code, fractionDigits: 0)
+        let symbol = reference.currencySymbol ?? code
+        let pattern = reference.positiveFormat ?? "¤#"
         let sign = amount < 0 ? "-" : ""
         let magnitude = abs(amount)
-        let number = magnitude.formatted(.number.notation(.compactName).precision(.significantDigits(1...3)))
-        return "\(sign)\(symbol)\(number)"
+        let number = magnitude < 1_000
+            ? magnitude.formatted(.number.precision(.fractionLength(0)))
+            : magnitude.formatted(.number.notation(.compactName).precision(.significantDigits(1...3)))
+        if pattern.hasPrefix("¤") {
+            let spacer = pattern.contains("¤ ") || pattern.contains("¤\u{00A0}") ? "\u{00A0}" : ""
+            return "\(sign)\(symbol)\(spacer)\(number)"
+        }
+        return "\(sign)\(number)\u{00A0}\(symbol)"
     }
 
     static func percent(_ value: Decimal, fractionDigits: Int = 1, showSign: Bool = false) -> String {

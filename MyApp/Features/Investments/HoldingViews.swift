@@ -129,7 +129,7 @@ struct HoldingDetailView: View {
                 }
             }
             MoneyText(amount: position.marketValue, code: holding.currencyCode)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .scaledFont(32)
             if let fraction = position.returnFraction {
                 Text("\(MoneyFormat.string(position.unrealizedProfit, code: holding.currencyCode, showSign: true)) (\(MoneyFormat.percent(fraction, showSign: true)))")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.signColor(fraction)).monospacedDigit()

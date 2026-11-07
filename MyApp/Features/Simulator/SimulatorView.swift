@@ -38,6 +38,7 @@ struct SimulatorView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 24)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .screenBackground()
                 .onAppear {
                     if !model.isLoaded { model.load(context: context, engine: engine) }
@@ -86,24 +87,29 @@ struct SimulatorView: View {
             Text("Projected net worth in \(years) year\(years == 1 ? "" : "s")")
                 .font(.subheadline).foregroundStyle(.white.opacity(0.8))
             Text(MoneyFormat.string(final?.netWorth ?? 0, code: baseCurrency, fractionDigits: 0))
-                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .scaledFont(38)
                 .foregroundStyle(.white)
                 .monospacedDigit()
-                .lineLimit(1).minimumScaleFactor(0.5)
+                .lineLimit(1).minimumScaleFactor(0.6)
                 .contentTransition(.numericText(value: final?.netWorth.doubleValue ?? 0))
                 .animation(.spring(response: 0.4), value: final?.netWorth)
             Text("≈ \(MoneyFormat.string(final?.realNetWorth ?? 0, code: baseCurrency, fractionDigits: 0)) in today's money")
                 .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)).monospacedDigit()
-            HStack(spacing: 0) {
-                heroMetric("Cash", final?.cash ?? 0)
-                heroMetric("Investments", final?.investments ?? 0)
-                heroMetric("Contributed", model.projection.totalContributions)
-                heroMetric("Growth", model.projection.totalGrowth)
+            Divider().overlay(Color.white.opacity(0.2))
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                GridRow {
+                    heroMetric("Cash", final?.cash ?? 0)
+                    heroMetric("Investments", final?.investments ?? 0)
+                }
+                GridRow {
+                    heroMetric("Contributed", model.projection.totalContributions)
+                    heroMetric("Investment growth", model.projection.totalGrowth)
+                }
             }
             if model.projection.shortfallMonths > 0 {
                 Label("Money runs out in \(model.projection.shortfallMonths) projected month(s). Review expenses or purchases.",
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.yellow)
+                    .font(.footnote.weight(.semibold)).foregroundStyle(Color(red: 1, green: 0.85, blue: 0.4))
             }
         }
         .padding(20)
@@ -116,9 +122,10 @@ struct SimulatorView: View {
 
     private func heroMetric(_ title: String, _ value: Decimal) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.white.opacity(0.7))
-            Text(MoneyFormat.compact(value.doubleValue, code: baseCurrency))
-                .font(.footnote.weight(.semibold)).foregroundStyle(.white).monospacedDigit()
+            Text(title).font(.caption).foregroundStyle(.white.opacity(0.78))
+            Text(MoneyFormat.string(value, code: baseCurrency, fractionDigits: 0))
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.white).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -156,7 +163,7 @@ struct SimulatorView: View {
                 .animation(.spring(response: 0.45), value: model.parameters)
                 .accessibilityLabel("Projection chart")
                 .accessibilityValue("Final projected net worth \(MoneyFormat.string(model.projection.final?.netWorth ?? 0, code: baseCurrency))")
-            Text("Projection — simulated, not recorded history.").font(.caption2).foregroundStyle(.secondary)
+            Text("Projection — simulated, not recorded history.").font(.caption).foregroundStyle(.secondary)
         }
         .card()
     }
@@ -302,7 +309,7 @@ struct SimulatorView: View {
                 .accessibilityElement(children: .combine)
             }
             Text("Estimated dates when projected nominal net worth first reaches each amount.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
         }
         .card()
     }
@@ -386,7 +393,7 @@ struct ParameterSlider: View {
                 .accessibilityLabel(title)
                 .accessibilityValue(valueText)
             if let footnote {
-                Text(footnote).font(.caption2).foregroundStyle(.orange)
+                Text(footnote).font(.caption).foregroundStyle(Theme.warning)
             }
         }
     }
@@ -430,7 +437,7 @@ struct MonteCarloCard: View {
 
                 if let final = result.final {
                     HStack(spacing: 0) {
-                        outcome("Pessimistic\n10th pct.", final.p10, .orange)
+                        outcome("Pessimistic\n10th pct.", final.p10, Theme.warning)
                         outcome("Median\n50th pct.", final.p50, Theme.projection)
                         outcome("Optimistic\n90th pct.", final.p90, Theme.positive)
                     }
@@ -459,7 +466,7 @@ struct MonteCarloCard: View {
                     }
                     if result.probabilityOfShortfall > 0 {
                         Text("In \(result.probabilityOfShortfall.formatted(.percent.precision(.fractionLength(0)))) of paths net worth turned negative at some point.")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.caption).foregroundStyle(Theme.warning)
                     }
                 }
                 Picker("Simulations", selection: Binding(get: { model.monteCarloRuns }, set: { model.monteCarloRuns = $0 })) {
@@ -478,7 +485,7 @@ struct MonteCarloCard: View {
             }
 
             Text("Each path draws random monthly returns (lognormal, seeded and reproducible). Percentiles show a range of plausible outcomes under your assumptions — real markets can do better or worse.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
         }
         .card()
     }
@@ -489,7 +496,7 @@ struct MonteCarloCard: View {
 
     private func outcome(_ title: String, _ value: Double, _ color: Color) -> some View {
         VStack(spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(title).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Text(MoneyFormat.compact(value, code: code)).font(.headline).monospacedDigit().foregroundStyle(color)
         }
         .frame(maxWidth: .infinity)
@@ -535,7 +542,7 @@ struct YearlyBreakdownView: View {
 
     private func cell(_ title: String, _ value: Decimal) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MoneyFormat.compact(value.doubleValue, code: code)).font(.caption.weight(.medium)).monospacedDigit()
         }
     }

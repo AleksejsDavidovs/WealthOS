@@ -118,7 +118,7 @@ struct PurchaseImpactView: View {
             .font(.subheadline)
             if withPurchase.shortfallMonths > baseline.shortfallMonths {
                 Label("This purchase would leave you without money in some months.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
         }
         .accessibilityElement(children: .combine)
@@ -141,7 +141,7 @@ struct PurchaseImpactView: View {
                 .foregroundStyle(Color.secondary.opacity(0.5))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
                 .annotation(position: .top, alignment: .leading) {
-                    Text(name).font(.caption2).foregroundStyle(.secondary)
+                    Text(name).font(.caption).foregroundStyle(.secondary)
                 }
         }
         .chartForegroundStyleScale(["Without purchase": Theme.accent, "With purchase": Color.orange])

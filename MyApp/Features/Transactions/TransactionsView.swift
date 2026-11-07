@@ -60,59 +60,66 @@ struct TransactionsView: View {
     @State private var showFilters = false
     @State private var editorRequest: TransactionEditorRequest?
     @State private var pendingDeletion: TransactionRecord?
+    @State private var showAccountEditor = false
 
-    var body: some View {
-        NavigationStack {
-            FinanceReader { engine in
-                let filtered = filteredTransactions(engine: engine)
-                List {
-                    if app.isDemoMode {
-                        DemoBanner().frame(maxWidth: .infinity).listRowBackground(Color.clear)
-                    }
-                    Section {
-                        FilteredSummaryView(transactions: filtered, engine: engine, code: baseCurrency,
-                                            title: filter.isActive || !searchText.isEmpty ? "Filtered" : filter.range.title)
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                    }
-                    if filtered.isEmpty {
-                        Section {
-                            if transactions.isEmpty {
-                                ContentUnavailableView {
-                                    Label("No Transactions", systemImage: "list.bullet.rectangle.portrait")
-                                } description: {
-                                    Text(engine.accounts.isEmpty ? "Add an account from Home, then record your income and expenses." : "Record your first income or expense.")
-                                } actions: {
-                                    if !engine.accounts.isEmpty {
-                                        Button("Add Expense") { editorRequest = .init(kind: .expense) }.prominentButtonStyle()
-                                    }
-                                }
-                            } else {
-                                ContentUnavailableView.search(text: searchText)
-                            }
+    private func transactionList(engine: FinanceEngine) -> some View {
+        let filtered = filteredTransactions(engine: engine)
+        return List {
+            if app.isDemoMode {
+                DemoBanner().frame(maxWidth: .infinity).listRowBackground(Color.clear)
+            }
+            Section {
+                FilteredSummaryView(transactions: filtered, engine: engine, code: baseCurrency,
+                                    title: filter.isActive || !searchText.isEmpty ? "Filtered" : filter.range.title)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
+            if filtered.isEmpty {
+                Section {
+                    if searchText.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Matching Transactions", systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text("Nothing matches the current filters.")
+                        } actions: {
+                            Button("Reset Filters") { filter = TransactionFilter() }
                         }
-                        .listRowBackground(Color.clear)
+                    } else {
+                        ContentUnavailableView.search(text: searchText)
                     }
-                    ForEach(grouped(filtered), id: \.0) { day, items in
-                        Section(day.formatted(.dateTime.weekday(.wide).day().month(.wide).year())) {
-                            ForEach(items) { transaction in
-                                Button { editorRequest = .init(kind: transaction.kind, transaction: transaction) } label: {
-                                    TransactionRow(transaction: transaction, engine: engine, categories: categories)
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) { pendingDeletion = transaction } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
+                }
+                .listRowBackground(Color.clear)
+            }
+            ForEach(grouped(filtered), id: \.0) { day, items in
+                Section(day.formatted(.dateTime.weekday(.wide).day().month(.wide).year())) {
+                    ForEach(items) { transaction in
+                        Button { editorRequest = .init(kind: transaction.kind, transaction: transaction) } label: {
+                            TransactionRow(transaction: transaction, engine: engine, categories: categories, showsDate: false)
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) { pendingDeletion = transaction } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
             }
-            .navigationTitle("Transactions")
-            .searchable(text: $searchText, prompt: "Search notes, categories, accounts")
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceReader { engine in
+                if transactions.isEmpty {
+                    TransactionsEmptyState(hasAccounts: !engine.accounts.isEmpty, isDemo: app.isDemoMode,
+                                           onAdd: { editorRequest = .init(kind: $0) },
+                                           onAddAccount: { showAccountEditor = true })
+                } else {
+                    transactionList(engine: engine)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
@@ -145,6 +152,7 @@ struct TransactionsView: View {
             }
             .sheet(isPresented: $showFilters) { TransactionFilterView(filter: $filter) }
             .sheet(item: $editorRequest) { TransactionEditorView(request: $0) }
+            .sheet(isPresented: $showAccountEditor) { AccountEditorView(account: nil) }
             .confirmationDialog("Delete this transaction?", isPresented: Binding(
                 get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }), titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
@@ -186,6 +194,90 @@ struct TransactionsView: View {
         let calendar = Calendar.current
         let groups = Dictionary(grouping: items) { calendar.startOfDay(for: $0.date) }
         return groups.keys.sorted(by: >).map { ($0, groups[$0] ?? []) }
+    }
+}
+
+/// First-run screen for the Transactions tab: explains the next step and offers direct actions.
+struct TransactionsEmptyState: View {
+    let hasAccounts: Bool
+    let isDemo: Bool
+    let onAdd: (TransactionKind) -> Void
+    let onAddAccount: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 22) {
+                if isDemo { DemoBanner() }
+                ZStack {
+                    Circle().fill(Theme.accent.opacity(0.12)).frame(width: 112, height: 112)
+                    Image(systemName: "list.bullet.rectangle.portrait.fill")
+                        .font(.system(size: 46, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .padding(.top, 36)
+                .accessibilityHidden(true)
+
+                VStack(spacing: 8) {
+                    Text(hasAccounts ? "No transactions yet" : "Start with an account")
+                        .font(.title2.bold())
+                    Text(hasAccounts
+                         ? "Record income and spending to see monthly totals, savings rate and category insights."
+                         : "Transactions belong to an account. Add your bank account, cash or card first.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 24)
+
+                VStack(spacing: 12) {
+                    if hasAccounts {
+                        Button { onAdd(.expense) } label: {
+                            Label("Add Expense", systemImage: "arrow.up.circle.fill").frame(maxWidth: .infinity)
+                        }
+                        .prominentButtonStyle()
+                        HStack(spacing: 12) {
+                            Button { onAdd(.income) } label: {
+                                Label("Income", systemImage: "arrow.down.circle.fill").frame(maxWidth: .infinity)
+                            }
+                            Button { onAdd(.transfer) } label: {
+                                Label("Transfer", systemImage: "arrow.left.arrow.right").frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Button(action: onAddAccount) {
+                            Label("Add Account", systemImage: "building.columns.fill").frame(maxWidth: .infinity)
+                        }
+                        .prominentButtonStyle()
+                    }
+                }
+                .controlSize(.large)
+                .padding(.horizontal, 24)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    tip("arrow.left.arrow.right", "Transfers between your accounts never count as income or spending.")
+                    tip("repeat", "Turn on Repeat for rent, salary or subscriptions — they're added automatically.")
+                    tip("square.and.arrow.down", "Import past transactions from CSV in Settings.")
+                }
+                .card()
+                .padding(.horizontal)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+        }
+        .screenBackground()
+        .navigationTitle("Transactions")
+        .navigationBarTitleDisplayMode(.large)
+    }
+
+    private func tip(_ symbol: String, _ text: String) -> some View {
+        Label {
+            Text(text).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(Theme.accent)
+        }
     }
 }
 

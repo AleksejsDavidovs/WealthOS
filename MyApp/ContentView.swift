@@ -81,10 +81,72 @@ struct MainTabView: View {
                 GoalsView()
             }
         }
+        .sheet(item: $app.quickAddRequest) { TransactionEditorView(request: $0) }
         .task { DataMaintenance.run(context: context, baseCurrency: baseCurrency) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { DataMaintenance.run(context: context, baseCurrency: baseCurrency) }
         }
+    }
+}
+
+/// Inline Quick Add row shown on Home directly under the net-worth card. It is part of
+/// the scroll content, so it never covers the chart, other cards, or the tab bar.
+struct QuickActionsRow: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { request(.expense) } label: {
+                Label("Expense", systemImage: "minus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.accentFill)
+
+            Button { request(.income) } label: {
+                Label("Income", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(Theme.positive)
+
+            Button { request(.transfer) } label: {
+                Label("Transfer", systemImage: "arrow.left.arrow.right")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(.indigo)
+        }
+        .controlSize(.large)
+        .labelStyle(.titleAndIcon)
+        .lineLimit(1)
+        .buttonBorderShape(.capsule)
+        .sensoryFeedback(.impact(weight: .medium), trigger: app.quickAddRequest?.id)
+    }
+
+    private func request(_ kind: TransactionKind) {
+        app.quickAddRequest = TransactionEditorRequest(kind: kind)
+    }
+}
+
+/// Toolbar "+" menu so Quick Add stays one tap away after scrolling past the inline row.
+struct QuickAddToolbarMenu: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        Menu {
+            Button { app.quickAddRequest = .init(kind: .expense) } label: { Label("Expense", systemImage: TransactionKind.expense.symbol) }
+            Button { app.quickAddRequest = .init(kind: .income) } label: { Label("Income", systemImage: TransactionKind.income.symbol) }
+            Button { app.quickAddRequest = .init(kind: .transfer) } label: { Label("Transfer", systemImage: TransactionKind.transfer.symbol) }
+        } label: {
+            Image(systemName: "plus")
+        } primaryAction: {
+            app.quickAddRequest = .init(kind: .expense)
+        }
+        .accessibilityLabel("Add transaction")
     }
 }
 

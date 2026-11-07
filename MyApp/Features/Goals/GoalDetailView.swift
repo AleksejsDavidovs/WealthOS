@@ -54,10 +54,10 @@ struct GoalDetailView: View {
                                 Label("On track", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.positive)
                             } else {
                                 Label("Behind plan by \(MoneyFormat.string(required - goal.monthlyContribution, code: baseCurrency))/month",
-                                      systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                                      systemImage: "exclamationmark.circle.fill").foregroundStyle(Theme.warning)
                             }
                         } else {
-                            Label("Target date has passed", systemImage: "calendar.badge.exclamationmark").foregroundStyle(.orange)
+                            Label("Target date has passed", systemImage: "calendar.badge.exclamationmark").foregroundStyle(Theme.warning)
                         }
                     }
                 }

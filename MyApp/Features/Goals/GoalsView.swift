@@ -56,7 +56,7 @@ struct GoalsView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Earmarked for Goals").font(.subheadline).foregroundStyle(.secondary)
-                    MoneyText(amount: allocated, code: baseCurrency).font(.system(size: 30, weight: .bold, design: .rounded))
+                    MoneyText(amount: allocated, code: baseCurrency).scaledFont(30)
                     Text("of \(MoneyFormat.string(target, code: baseCurrency, fractionDigits: 0)) total targets")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -81,10 +81,10 @@ struct GoalsView: View {
             if unallocated < 0 {
                 Label("Goals earmark more than your cash and investments. Reduce allocations to keep them realistic.",
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             Text("Earmarks are portions of money you already have — they are not added to your net worth.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
         }
         .card()
     }
@@ -124,9 +124,9 @@ struct GoalCard: View {
                 if let completion = GoalMath.estimatedCompletion(allocated: goal.allocatedAmount, target: goal.targetAmount,
                                                                  monthly: goal.monthlyContribution), progress < 1 {
                     Text("Est. \(completion.formatted(.dateTime.month(.abbreviated).year()))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 } else if progress >= 1 {
-                    Label("Reached", systemImage: "checkmark.seal.fill").font(.caption2).foregroundStyle(Theme.positive)
+                    Label("Reached", systemImage: "checkmark.seal.fill").font(.caption).foregroundStyle(Theme.positive)
                 }
             }
         }

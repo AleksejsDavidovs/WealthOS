@@ -88,10 +88,10 @@ struct TransactionEditorView: View {
                     VStack(spacing: 6) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(Currencies.symbol(for: account?.currencyCode ?? baseCurrency))
-                                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                                .scaledFont(30, weight: .semibold)
                                 .foregroundStyle(.secondary)
                             TextField("0", text: $amountText)
-                                .font(.system(size: 48, weight: .bold, design: .rounded))
+                                .scaledFont(48)
                                 .keyboardType(kind == .adjustment ? .numbersAndPunctuation : .decimalPad)
                                 .monospacedDigit()
                                 .focused($amountFocused)
@@ -298,7 +298,7 @@ struct CategoryGrid: View {
                             .background(isSelected ? AnyShapeStyle(Theme.color(named: category.colorName).gradient)
                                                    : AnyShapeStyle(Theme.color(named: category.colorName).opacity(0.15)),
                                         in: Circle())
-                        Text(category.name).font(.caption2).lineLimit(1).foregroundStyle(.primary)
+                        Text(category.name).font(.caption).lineLimit(1).foregroundStyle(.primary)
                     }
                 }
                 .buttonStyle(.plain)

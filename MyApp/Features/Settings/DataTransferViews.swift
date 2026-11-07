@@ -218,7 +218,7 @@ struct CSVImportView: View {
                     if preview.fileAlreadyImported {
                         Section {
                             Label("This exact file was imported before. Duplicates are skipped automatically.",
-                                  systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                  systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
                         }
                     }
                     Section("Summary") {

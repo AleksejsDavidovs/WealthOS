@@ -6,10 +6,15 @@ enum Theme {
     static let spacing: CGFloat = 16
     static let cardPadding: CGFloat = 18
 
-    static let accent = Color(red: 0.20, green: 0.78, blue: 0.62)
-    static let positive = Color(red: 0.20, green: 0.78, blue: 0.45)
-    static let negative = Color(red: 1.0, green: 0.36, blue: 0.36)
-    static let projection = Color.purple
+    // Semantic colors adapt to the appearance so text keeps ≥ 4.5:1 contrast on
+    // both white (light) and near-black (dark) cards.
+    static let accent = Color(light: Color(red: 0.0, green: 0.52, blue: 0.42), dark: Color(red: 0.20, green: 0.78, blue: 0.62))
+    /// Fill for prominent buttons; white labels stay readable in both appearances.
+    static let accentFill = Color(red: 0.0, green: 0.50, blue: 0.42)
+    static let positive = Color(light: Color(red: 0.0, green: 0.50, blue: 0.22), dark: Color(red: 0.25, green: 0.82, blue: 0.48))
+    static let negative = Color(light: Color(red: 0.80, green: 0.10, blue: 0.12), dark: Color(red: 1.0, green: 0.45, blue: 0.43))
+    static let warning = Color(light: Color(red: 0.70, green: 0.35, blue: 0.0), dark: Color(red: 1.0, green: 0.68, blue: 0.25))
+    static let projection = Color(light: Color(red: 0.45, green: 0.22, blue: 0.80), dark: Color(red: 0.72, green: 0.55, blue: 1.0))
 
     static let heroGradient = LinearGradient(
         colors: [Color(red: 0.07, green: 0.36, blue: 0.33), Color(red: 0.05, green: 0.16, blue: 0.27)],
@@ -94,14 +99,45 @@ extension View {
     @ViewBuilder
     func prominentButtonStyle() -> some View {
         if #available(iOS 26.0, *) {
-            self.buttonStyle(.glassProminent)
+            self.buttonStyle(.glassProminent).tint(Theme.accentFill)
         } else {
-            self.buttonStyle(.borderedProminent)
+            self.buttonStyle(.borderedProminent).tint(Theme.accentFill)
         }
     }
 
     func screenBackground() -> some View {
         self.background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    /// Fixed design size that still follows the user's text size setting.
+    func scaledFont(_ size: CGFloat, weight: Font.Weight = .bold, design: Font.Design = .rounded,
+                    relativeTo style: Font.TextStyle = .largeTitle) -> some View {
+        modifier(ScaledFontModifier(size: size, weight: weight, design: design, style: style))
+    }
+}
+
+struct ScaledFontModifier: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+
+    init(size: CGFloat, weight: Font.Weight, design: Font.Design, style: Font.TextStyle) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+        self.weight = weight
+        self.design = design
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: weight, design: design))
+    }
+}
+
+extension Color {
+    /// Appearance-dependent color backed by a dynamic UIColor.
+    init(light: Color, dark: Color) {
+        self.init(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
+        })
     }
 }
 
