@@ -144,9 +144,13 @@ enum LedgerService {
         try context.save()
     }
 
+    /// Manual price entry. A typed price always wins: it marks the price as manual and turns
+    /// off automatic market updates for this holding so it isn't overwritten later.
     static func updatePrice(of holding: Holding, to price: Decimal, date: Date = .now, in context: ModelContext) throws {
         holding.currentPrice = price
         holding.priceUpdatedAt = date
+        holding.priceSource = .manual
+        holding.autoApplyMarketPrice = false
         context.insert(PricePoint(holdingID: holding.id, date: date, price: price))
         try context.save()
     }
@@ -158,6 +162,7 @@ enum LedgerService {
         if let existing {
             existing.rateToBase = rate
             existing.updatedAt = .now
+            existing.source = .manual
         } else {
             context.insert(CurrencyRate(code: code, rateToBase: rate))
         }
@@ -197,6 +202,7 @@ enum LedgerService {
         for item in try context.fetch(FetchDescriptor<NetWorthSnapshot>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<Goal>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<SimulationScenario>()) { context.delete(item) }
+        for item in try context.fetch(FetchDescriptor<MarketQuote>()) { context.delete(item) }
     }
 }
 

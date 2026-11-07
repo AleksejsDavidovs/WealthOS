@@ -82,10 +82,25 @@ struct MainTabView: View {
             }
         }
         .sheet(item: $app.quickAddRequest) { TransactionEditorView(request: $0) }
-        .task { DataMaintenance.run(context: context, baseCurrency: baseCurrency) }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { DataMaintenance.run(context: context, baseCurrency: baseCurrency) }
+        .task {
+            DataMaintenance.run(context: context, baseCurrency: baseCurrency)
+            await autoRefreshMarketData()
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                DataMaintenance.run(context: context, baseCurrency: baseCurrency)
+                Task { await autoRefreshMarketData() }
+            }
+        }
+    }
+
+    @Environment(MarketDataService.self) private var marketData
+    @AppStorage(SettingsKey.marketAutoRefresh) private var marketAutoRefresh = true
+
+    /// Respects each provider's cache TTL, so frequent app switches don't cause requests.
+    private func autoRefreshMarketData() async {
+        guard marketData.isEnabled, marketAutoRefresh else { return }
+        await marketData.refresh(context: context, baseCurrency: baseCurrency)
     }
 }
 

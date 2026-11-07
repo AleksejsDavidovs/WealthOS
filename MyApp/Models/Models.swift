@@ -178,17 +178,26 @@ final class Holding {
     var symbol: String = ""
     var assetClassRaw: String = AssetClass.etf.rawValue
     var currencyCode: String = "EUR"
-    /// Manually entered market price per unit, in `currencyCode`. Never fetched live.
+    /// Price per unit in `currencyCode` used for valuation. Entered manually, or copied from a
+    /// market quote only when the user taps "Use" or enabled automatic updates for this holding.
     var currentPrice: Decimal = 0
     var priceUpdatedAt: Date?
     /// Optional investment account this position is held in (organizational only).
     var accountID: UUID?
     var notes: String = ""
     var createdAt: Date = Date()
+    /// Provider identifier: Alpha Vantage symbol (e.g. "VWCE.DEX") or CoinGecko coin id ("bitcoin").
+    var marketSymbol: String = ""
+    /// Currency the provider quotes in (may be "GBX" for London listings). Empty = holding currency.
+    var marketCurrencyCode: String = ""
+    var priceSourceRaw: String = PriceSource.manual.rawValue
+    /// Explicit per-holding opt-in to copy refreshed market quotes into `currentPrice`.
+    var autoApplyMarketPrice: Bool = false
 
     init(id: UUID = UUID(), name: String, symbol: String, assetClass: AssetClass, currencyCode: String,
          currentPrice: Decimal, priceUpdatedAt: Date? = nil, accountID: UUID? = nil, notes: String = "",
-         createdAt: Date = .now) {
+         createdAt: Date = .now, marketSymbol: String = "", marketCurrencyCode: String = "",
+         priceSource: PriceSource = .manual, autoApplyMarketPrice: Bool = false) {
         self.id = id
         self.name = name
         self.symbol = symbol
@@ -199,11 +208,40 @@ final class Holding {
         self.accountID = accountID
         self.notes = notes
         self.createdAt = createdAt
+        self.marketSymbol = marketSymbol
+        self.marketCurrencyCode = marketCurrencyCode
+        self.priceSourceRaw = priceSource.rawValue
+        self.autoApplyMarketPrice = autoApplyMarketPrice
     }
 
     var assetClass: AssetClass {
         get { AssetClass(rawValue: assetClassRaw) ?? .other }
         set { assetClassRaw = newValue.rawValue }
+    }
+
+    var priceSource: PriceSource {
+        get { PriceSource(rawValue: priceSourceRaw) ?? .manual }
+        set { priceSourceRaw = newValue.rawValue }
+    }
+
+    /// Which provider can quote this holding, if a market symbol is linked.
+    var marketProvider: MarketProvider? {
+        guard !marketSymbol.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        switch assetClass {
+        case .crypto: return .coinGecko
+        case .etf, .stock, .other: return .alphaVantage
+        case .cash: return nil
+        }
+    }
+
+    /// Currency the provider reports prices in for this holding.
+    var marketQuoteCurrency: String {
+        if marketProvider == .coinGecko { return currencyCode }
+        return marketCurrencyCode.isEmpty ? currencyCode : marketCurrencyCode
+    }
+
+    var marketQuoteKey: String? {
+        marketProvider.map { MarketQuote.key(provider: $0, symbol: marketSymbol, currency: marketQuoteCurrency) }
     }
 }
 
@@ -266,14 +304,59 @@ final class PricePoint {
 @Model
 final class CurrencyRate {
     var code: String = ""
-    /// 1 unit of `code` equals `rateToBase` units of the base currency. Entered manually.
+    /// 1 unit of `code` equals `rateToBase` units of the base currency.
     var rateToBase: Decimal = 1
     var updatedAt: Date = Date()
+    var sourceRaw: String = PriceSource.manual.rawValue
 
-    init(code: String, rateToBase: Decimal, updatedAt: Date = .now) {
+    init(code: String, rateToBase: Decimal, updatedAt: Date = .now, source: PriceSource = .manual) {
         self.code = code
         self.rateToBase = rateToBase
         self.updatedAt = updatedAt
+        self.sourceRaw = source.rawValue
+    }
+
+    var source: PriceSource {
+        get { PriceSource(rawValue: sourceRaw) ?? .manual }
+        set { sourceRaw = newValue.rawValue }
+    }
+}
+
+/// Local cache of public market quotes. Quotes never affect valuation by themselves;
+/// they're copied into a holding's price or a currency rate only on explicit opt-in.
+@Model
+final class MarketQuote {
+    var key: String = ""
+    var providerRaw: String = MarketProvider.coinGecko.rawValue
+    var symbol: String = ""
+    /// Currency of `price` (for FX quotes: the base currency; `price` = 1 `symbol` in base).
+    var currencyCode: String = ""
+    var price: Decimal = 0
+    /// Provider's own timestamp for the quote (trading day or last update), if supplied.
+    var quoteTime: Date?
+    /// When WealthOS last fetched this quote successfully.
+    var fetchedAt: Date = Date()
+
+    init(provider: MarketProvider, symbol: String, currencyCode: String, price: Decimal,
+         quoteTime: Date?, fetchedAt: Date) {
+        self.key = Self.key(provider: provider, symbol: symbol, currency: currencyCode)
+        self.providerRaw = provider.rawValue
+        self.symbol = symbol
+        self.currencyCode = currencyCode
+        self.price = price
+        self.quoteTime = quoteTime
+        self.fetchedAt = fetchedAt
+    }
+
+    var provider: MarketProvider { MarketProvider(rawValue: providerRaw) ?? .coinGecko }
+
+    static func key(provider: MarketProvider, symbol: String, currency: String) -> String {
+        "\(provider.rawValue):\(symbol.lowercased()):\(currency.uppercased())"
+    }
+
+    var value: QuoteValue {
+        QuoteValue(provider: provider, symbol: symbol, currency: currencyCode, price: price,
+                   quoteTime: quoteTime, fetchedAt: fetchedAt)
     }
 }
 

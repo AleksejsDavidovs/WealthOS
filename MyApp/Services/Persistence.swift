@@ -6,7 +6,7 @@ enum Persistence {
     static let modelTypes: [any PersistentModel.Type] = [
         Account.self, TransactionRecord.self, TransactionCategory.self, RecurringRule.self,
         Holding.self, InvestmentTrade.self, PricePoint.self, CurrencyRate.self,
-        NetWorthSnapshot.self, Goal.self, SimulationScenario.self
+        NetWorthSnapshot.self, Goal.self, SimulationScenario.self, MarketQuote.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }
@@ -63,6 +63,12 @@ enum SettingsKey {
     static let estimatedIncome = "estimatedMonthlyIncome"
     static let estimatedExpenses = "estimatedMonthlyExpenses"
     static let importedFileHashes = "importedCSVFileHashes"
+    /// Online market prices are off by default; the app is fully offline until enabled.
+    static let marketDataEnabled = "marketDataEnabled"
+    static let marketAutoRefresh = "marketAutoRefresh"
+    static let marketAutoApplyFX = "marketAutoApplyFX"
+    static let marketLastSuccess = "marketLastSuccess"
+    static let marketRateLimitPrefix = "marketRateLimit."
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable {

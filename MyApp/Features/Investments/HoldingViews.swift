@@ -54,6 +54,8 @@ struct HoldingDetailView: View {
                     }
                 }
 
+                HoldingMarketSection(holding: holding, onLink: { showEditor = true })
+
                 if prices.count >= 2 {
                     Section("Price History (manual entries)") {
                         Chart(prices) { point in
@@ -186,6 +188,12 @@ struct HoldingEditorView: View {
     @State private var priceText: String
     @State private var accountID: UUID?
     @State private var notes: String
+    @State private var marketSymbol: String
+    @State private var marketCurrency: String
+    @State private var autoApply: Bool
+    @State private var showSearch = false
+    @Environment(MarketDataService.self) private var market
+    @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
 
     init(holding: Holding?) {
         self.holding = holding
@@ -196,6 +204,25 @@ struct HoldingEditorView: View {
         _priceText = State(initialValue: holding?.currentPrice.inputString ?? "")
         _accountID = State(initialValue: holding?.accountID)
         _notes = State(initialValue: holding?.notes ?? "")
+        _marketSymbol = State(initialValue: holding?.marketSymbol ?? "")
+        _marketCurrency = State(initialValue: holding?.marketCurrencyCode ?? "")
+        _autoApply = State(initialValue: holding?.autoApplyMarketPrice ?? false)
+    }
+
+    private var provider: MarketProvider? {
+        switch assetClass {
+        case .crypto: .coinGecko
+        case .etf, .stock, .other: .alphaVantage
+        case .cash: nil
+        }
+    }
+
+    private var trimmedMarketSymbol: String { marketSymbol.trimmingCharacters(in: .whitespaces) }
+
+    private var marketSymbolValid: Bool {
+        guard !trimmedMarketSymbol.isEmpty else { return true }
+        return provider == .coinGecko ? QuoteValidator.isValidCoinID(trimmedMarketSymbol.lowercased())
+                                      : QuoteValidator.isValidTicker(trimmedMarketSymbol)
     }
 
     private var priceValidation: AmountValidation { .price(priceText, allowZero: true) }
@@ -221,7 +248,38 @@ struct HoldingEditorView: View {
                     AmountField(title: "Current price", text: $priceText, currencyCode: currencyCode,
                                 validation: priceText.isEmpty ? .empty : priceValidation, prompt: "0.00")
                 } footer: {
-                    Text("Enter the current market price manually. WealthOS never fetches prices from the internet.")
+                    Text("The price used to value this holding. Typing a price here keeps it as a manual price.")
+                }
+                if let provider {
+                    Section {
+                        HStack {
+                            TextField(provider == .coinGecko ? "Coin ID, e.g. bitcoin" : "Ticker, e.g. VWCE.DEX", text: $marketSymbol)
+                                .textInputAutocapitalization(provider == .coinGecko ? .never : .characters)
+                                .autocorrectionDisabled()
+                            if marketEnabled {
+                                Button("Search") { showSearch = true }.buttonStyle(.borderless)
+                            }
+                        }
+                        if !marketSymbolValid {
+                            Text("This symbol contains unsupported characters.").font(.caption).foregroundStyle(Theme.negative)
+                        }
+                        if provider == .alphaVantage && !trimmedMarketSymbol.isEmpty {
+                            Picker("Quoted in", selection: $marketCurrency) {
+                                Text("\(currencyCode) (same as holding)").tag("")
+                                Text("GBX (pence, London)").tag("GBX")
+                                ForEach(Currencies.supported.filter { $0 != currencyCode }, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                        if !trimmedMarketSymbol.isEmpty {
+                            Toggle("Update price automatically", isOn: $autoApply)
+                        }
+                    } header: {
+                        Text("Market Data (\(provider.displayName))")
+                    } footer: {
+                        Text(provider == .coinGecko
+                             ? "Optional. CoinGecko coin ID used to fetch near real-time public prices."
+                             : "Optional. Alpha Vantage symbol with exchange suffix, e.g. VWCE.DEX (XETRA), CSPX.LON (London). End-of-day prices on the free plan.")
+                    }
                 }
                 Section {
                     Picker("Held in", selection: $accountID) {
@@ -238,10 +296,31 @@ struct HoldingEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save).disabled(trimmedName.isEmpty || (!priceText.isEmpty && priceValidation.value == nil))
+                    Button("Save", action: save)
+                        .disabled(trimmedName.isEmpty || !marketSymbolValid || (!priceText.isEmpty && priceValidation.value == nil))
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .sheet(isPresented: $showSearch) {
+                if let provider {
+                    SymbolSearchView(provider: provider, initialQuery: symbol.isEmpty ? name : symbol) { match in
+                        marketSymbol = match.symbol
+                        if provider == .alphaVantage, let currency = match.currency?.uppercased() {
+                            marketCurrency = currency == currencyCode ? "" : (currency == "GBP" || currency == "GBX" || Currencies.supported.contains(currency) ? currency : "")
+                        }
+                        if symbol.isEmpty { symbol = provider == .coinGecko ? match.detail.components(separatedBy: " ").first ?? "" : match.symbol }
+                    }
                 }
             }
         }
+    }
+
+    /// A manually typed price always wins: it disables automatic market updates.
+    private func applyMarketFields(to holding: Holding, manualPriceEntered: Bool) {
+        let linked = provider == nil ? "" : trimmedMarketSymbol
+        holding.marketSymbol = provider == .coinGecko ? linked.lowercased() : linked.uppercased()
+        holding.marketCurrencyCode = provider == .alphaVantage && !linked.isEmpty ? marketCurrency : ""
+        holding.autoApplyMarketPrice = !linked.isEmpty && autoApply && !manualPriceEntered
     }
 
     private func save() {
@@ -254,10 +333,12 @@ struct HoldingEditorView: View {
             holding.accountID = accountID
             holding.notes = notes
             if priceChanged { try? LedgerService.updatePrice(of: holding, to: price, in: context) }
+            applyMarketFields(to: holding, manualPriceEntered: priceChanged)
         } else {
             let created = Holding(name: trimmedName, symbol: symbol.trimmingCharacters(in: .whitespaces).uppercased(),
                                   assetClass: assetClass, currencyCode: currencyCode, currentPrice: price,
                                   priceUpdatedAt: priceText.isEmpty ? nil : .now, accountID: accountID, notes: notes)
+            applyMarketFields(to: created, manualPriceEntered: false)
             context.insert(created)
             if !priceText.isEmpty { context.insert(PricePoint(holdingID: created.id, date: .now, price: price)) }
         }

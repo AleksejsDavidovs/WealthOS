@@ -10,6 +10,11 @@ struct ExchangeRatesView: View {
     @Query private var holdings: [Holding]
     @State private var editingCode: String?
     @State private var addCode = "USD"
+    @Query private var quotes: [MarketQuote]
+
+    private func marketQuote(_ code: String) -> MarketQuote? {
+        quotes.first { $0.key == MarketQuote.key(provider: .frankfurter, symbol: code, currency: baseCurrency) }
+    }
 
     private var usedCurrencies: [String] {
         Set(accounts.map(\.currencyCode) + holdings.map(\.currencyCode)).subtracting([baseCurrency]).sorted()
@@ -27,10 +32,25 @@ struct ExchangeRatesView: View {
                     Button { editingCode = code } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("1 \(code) = ").font(.body) + Text(rate.map { "\($0.rateToBase.formatted(.number.precision(.fractionLength(2...6)))) \(baseCurrency)" } ?? "Not set")
+                                Text("1 \(code) = \(rate.map { "\($0.rateToBase.formatted(.number.precision(.fractionLength(2...6)))) \(baseCurrency)" } ?? "Not set")")
                                     .font(.body.weight(.semibold))
-                                Text(rate.map { "Updated \($0.updatedAt.relativeDescription)" } ?? "Required for balances in \(code)")
-                                    .font(.caption).foregroundStyle(rate == nil ? .orange : .secondary)
+                                Text(rate.map { "\($0.source == .market ? "Market" : "Manual") · updated \($0.updatedAt.relativeDescription)" } ?? "Required for balances in \(code)")
+                                    .font(.caption).foregroundStyle(rate == nil ? Theme.warning : .secondary)
+                                if let quote = marketQuote(code), quote.price != rate?.rateToBase {
+                                    HStack(spacing: 8) {
+                                        Text("Market: \(quote.price.formatted(.number.precision(.fractionLength(2...6)))) · \(QuoteFreshness.evaluate(latency: .dailyReference, fetchedAt: quote.fetchedAt, now: .now).title(for: .dailyReference))")
+                                            .font(.caption).foregroundStyle(Theme.accent)
+                                        Button("Use") {
+                                            if MarketPriceApplier.applyRate(quote.value, baseCurrency: baseCurrency, rates: rates, context: context) {
+                                                try? context.save()
+                                                DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                                            }
+                                        }
+                                        .font(.caption.weight(.semibold))
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.mini)
+                                    }
+                                }
                             }
                             Spacer()
                             Image(systemName: "pencil").foregroundStyle(.secondary)
@@ -52,7 +72,7 @@ struct ExchangeRatesView: View {
             } header: {
                 Text("Rates to \(baseCurrency)")
             } footer: {
-                Text("Exchange rates are entered manually and are not live. Update them periodically for accurate totals.")
+                Text("Enter rates manually, or turn on Market Data to download daily central-bank reference rates (Frankfurter). Market rates replace yours only when you tap “Use” or enable automatic exchange rates.")
             }
             Section("Add Currency") {
                 Picker("Currency", selection: $addCode) {

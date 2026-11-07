@@ -9,6 +9,9 @@ struct InvestmentsView: View {
     @State private var showHoldingEditor = false
     @State private var showRates = false
     @State private var selectedAngle: Double?
+    @Query private var quotes: [MarketQuote]
+    @Environment(MarketDataService.self) private var market
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         NavigationStack {
@@ -16,8 +19,7 @@ struct InvestmentsView: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
-                        InfoBanner(text: "Prices and exchange rates are entered manually and are not live market data.",
-                                   symbol: "hand.raised.fill", tint: .blue)
+                        MarketStatusCard()
                         portfolioHeader(engine)
                         if engine.positions.isEmpty {
                             EmptyStateCard(title: "Track your portfolio",
@@ -33,6 +35,9 @@ struct InvestmentsView: View {
                     .padding(.bottom, 24)
                 }
                 .screenBackground()
+                .refreshable {
+                    if market.isEnabled { await market.refresh(context: context, baseCurrency: baseCurrency, force: true) }
+                }
             }
             .navigationTitle("Investments")
             .toolbar {
@@ -185,9 +190,13 @@ struct InvestmentsView: View {
             SectionHeader("Holdings")
             VStack(spacing: 0) {
                 let sorted = engine.positions.sorted { ($0.marketValueBase ?? 0) > ($1.marketValueBase ?? 0) }
+                let quoteIndex = Dictionary(quotes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
                 ForEach(sorted) { position in
                     NavigationLink { HoldingDetailView(holding: position.holding) } label: {
-                        HoldingRow(position: position, baseCurrency: baseCurrency).padding(.vertical, 10)
+                        HoldingRow(position: position, baseCurrency: baseCurrency,
+                                   status: PriceStatus.describe(holding: position.holding,
+                                                                quote: market.quote(for: position.holding, in: quoteIndex)))
+                            .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
                     if position.id != sorted.last?.id { Divider() }
@@ -201,28 +210,20 @@ struct InvestmentsView: View {
 struct HoldingRow: View {
     let position: PositionSummary
     let baseCurrency: String
-
-    private var isStale: Bool {
-        guard let updated = position.holding.priceUpdatedAt else { return true }
-        return Date.now.timeIntervalSince(updated) > 7 * 86_400
-    }
+    let status: PriceStatus
 
     var body: some View {
         HStack(spacing: 12) {
             IconBadge(symbol: position.holding.assetClass.symbol, color: Theme.color(named: position.holding.assetClass.colorName))
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol)
-                        .font(.body.weight(.semibold))
-                    if isStale {
-                        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(Theme.warning).font(.caption)
-                            .accessibilityLabel("Price may be outdated")
-                    }
-                }
+                Text(position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
                 Text("\(MoneyFormat.quantity(position.position.quantity)) × \(MoneyFormat.string(position.holding.currentPrice, code: position.holding.currencyCode))")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                PriceStatusBadge(status: status)
             }
-            Spacer()
+            Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
                 Text(MoneyFormat.string(position.marketValue, code: position.holding.currencyCode))
                     .font(.body.weight(.semibold)).monospacedDigit()

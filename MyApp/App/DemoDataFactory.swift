@@ -69,11 +69,14 @@ enum DemoDataFactory {
 
         // Holdings with trades funded from the brokerage cash (no double counting).
         let etf = Holding(name: "FTSE All-World", symbol: "VWCE", assetClass: .etf, currencyCode: "EUR",
-                          currentPrice: Decimal(string: "128.40")!, priceUpdatedAt: now.addingTimeInterval(-3_600 * 5), accountID: broker.id)
+                          currentPrice: Decimal(string: "128.40")!, priceUpdatedAt: now.addingTimeInterval(-3_600 * 5), accountID: broker.id,
+                          marketSymbol: "VWCE.DEX")
         let stock = Holding(name: "Apple", symbol: "AAPL", assetClass: .stock, currencyCode: "USD",
-                            currentPrice: Decimal(string: "231.20")!, priceUpdatedAt: now.addingTimeInterval(-86_400 * 3), accountID: broker.id)
+                            currentPrice: Decimal(string: "231.20")!, priceUpdatedAt: now.addingTimeInterval(-86_400 * 3), accountID: broker.id,
+                            marketSymbol: "AAPL")
         let crypto = Holding(name: "Bitcoin", symbol: "BTC", assetClass: .crypto, currencyCode: "USD",
-                             currentPrice: 68_500, priceUpdatedAt: now.addingTimeInterval(-86_400 * 9), accountID: broker.id)
+                             currentPrice: 68_500, priceUpdatedAt: now.addingTimeInterval(-86_400 * 9), accountID: broker.id,
+                             marketSymbol: "bitcoin")
         [etf, stock, crypto].forEach(context.insert)
 
         let trades: [(Holding, TradeKind, Int, Decimal, Decimal, Decimal)] = [

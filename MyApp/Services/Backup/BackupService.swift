@@ -42,7 +42,9 @@ enum BackupService {
             holdings: try context.fetch(FetchDescriptor<Holding>()).map {
                 .init(id: $0.id, name: $0.name, symbol: $0.symbol, assetClass: $0.assetClassRaw,
                       currencyCode: $0.currencyCode, currentPrice: $0.currentPrice, priceUpdatedAt: $0.priceUpdatedAt,
-                      accountID: $0.accountID, notes: $0.notes, createdAt: $0.createdAt)
+                      accountID: $0.accountID, notes: $0.notes, createdAt: $0.createdAt,
+                      marketSymbol: $0.marketSymbol, marketCurrencyCode: $0.marketCurrencyCode,
+                      priceSource: $0.priceSourceRaw, autoApplyMarketPrice: $0.autoApplyMarketPrice)
             },
             trades: try context.fetch(FetchDescriptor<InvestmentTrade>()).map {
                 .init(id: $0.id, holdingID: $0.holdingID, kind: $0.kindRaw, date: $0.date, quantity: $0.quantity,
@@ -53,7 +55,7 @@ enum BackupService {
                 .init(id: $0.id, holdingID: $0.holdingID, date: $0.date, price: $0.price)
             },
             rates: try context.fetch(FetchDescriptor<CurrencyRate>()).map {
-                .init(code: $0.code, rateToBase: $0.rateToBase, updatedAt: $0.updatedAt)
+                .init(code: $0.code, rateToBase: $0.rateToBase, updatedAt: $0.updatedAt, source: $0.sourceRaw)
             },
             snapshots: try context.fetch(FetchDescriptor<NetWorthSnapshot>()).map {
                 .init(id: $0.id, date: $0.date, netWorth: $0.netWorth, liquidTotal: $0.liquidTotal,
@@ -166,7 +168,10 @@ enum BackupService {
         for h in payload.holdings {
             context.insert(Holding(id: h.id, name: h.name, symbol: h.symbol, assetClass: AssetClass(rawValue: h.assetClass) ?? .other,
                                    currencyCode: h.currencyCode, currentPrice: h.currentPrice, priceUpdatedAt: h.priceUpdatedAt,
-                                   accountID: h.accountID, notes: h.notes, createdAt: h.createdAt))
+                                   accountID: h.accountID, notes: h.notes, createdAt: h.createdAt,
+                                   marketSymbol: h.marketSymbol ?? "", marketCurrencyCode: h.marketCurrencyCode ?? "",
+                                   priceSource: PriceSource(rawValue: h.priceSource ?? "") ?? .manual,
+                                   autoApplyMarketPrice: h.autoApplyMarketPrice ?? false))
         }
         for t in payload.trades {
             context.insert(InvestmentTrade(id: t.id, holdingID: t.holdingID, kind: TradeKind(rawValue: t.kind) ?? .buy,
@@ -178,7 +183,8 @@ enum BackupService {
             context.insert(PricePoint(id: p.id, holdingID: p.holdingID, date: p.date, price: p.price))
         }
         for r in payload.rates {
-            context.insert(CurrencyRate(code: r.code, rateToBase: r.rateToBase, updatedAt: r.updatedAt))
+            context.insert(CurrencyRate(code: r.code, rateToBase: r.rateToBase, updatedAt: r.updatedAt,
+                                        source: PriceSource(rawValue: r.source ?? "") ?? .manual))
         }
         for s in payload.snapshots {
             context.insert(NetWorthSnapshot(id: s.id, date: s.date, netWorth: s.netWorth, liquidTotal: s.liquidTotal,

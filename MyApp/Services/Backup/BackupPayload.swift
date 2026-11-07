@@ -45,6 +45,7 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     struct HoldingDTO: Codable, Equatable, Sendable {
         var id: UUID, name: String, symbol: String, assetClass: String, currencyCode: String, currentPrice: Decimal
         var priceUpdatedAt: Date?, accountID: UUID?, notes: String, createdAt: Date
+        var marketSymbol: String?, marketCurrencyCode: String?, priceSource: String?, autoApplyMarketPrice: Bool?
     }
     struct TradeDTO: Codable, Equatable, Sendable {
         var id: UUID, holdingID: UUID, kind: String, date: Date, quantity: Decimal, pricePerUnit: Decimal, fee: Decimal
@@ -55,6 +56,7 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     }
     struct RateDTO: Codable, Equatable, Sendable {
         var code: String, rateToBase: Decimal, updatedAt: Date
+        var source: String?
     }
     struct SnapshotDTO: Codable, Equatable, Sendable {
         var id: UUID, date: Date, netWorth: Decimal, liquidTotal: Decimal, investmentTotal: Decimal
