@@ -1,0 +1,71 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Xcode user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+project.xcworkspace/xcuserdata/
+
+# Build outputs
+DerivedData/
+build/
+Build/
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+*.xcresult
+*.hmap
+timeline.xctimeline
+playground.xcworkspace
+OptimizationProfiles/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+/Packages/
+
+# Local databases and app data (never commit financial data)
+*.store
+*.store-shm
+*.store-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.db
+*.realm
+
+# Backups and exports from WealthOS
+*.wosbackup
+WealthOS-Backup-*
+WealthOS-Transactions-*.csv
+exports/
+Exports/
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.p12
+*.key
+*.mobileprovision
+*.provisionprofile
+Secrets.swift
+Secrets.xcconfig
+*.secrets
+*.secret
+credentials.json
+GoogleService-Info.plist
+
+# Editors / tooling
+.vscode/
+.idea/
+*.swp
+*~
