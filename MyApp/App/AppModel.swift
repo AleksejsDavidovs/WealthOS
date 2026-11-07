@@ -18,10 +18,18 @@ final class AppModel {
     /// Set by Quick Add controls; MainTabView presents the transaction editor.
     var quickAddRequest: TransactionEditorRequest?
 
+    /// True if the store already held data at launch; onboarding is then never shown.
+    private(set) var storeHadDataAtLaunch = false
+
     init() {
         do {
-            persistentContainer = try Persistence.makePersistentContainer()
+            if Persistence.isHostingTests() {
+                persistentContainer = try Persistence.makeInMemoryContainer()
+            } else {
+                persistentContainer = try Persistence.makePersistentContainer()
+            }
             loadError = nil
+            storeHadDataAtLaunch = persistentContainer.map { Persistence.containsUserData($0.mainContext) } ?? false
         } catch {
             Persistence.logger.error("Failed to open the data store.")
             persistentContainer = nil

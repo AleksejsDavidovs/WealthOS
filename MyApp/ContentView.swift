@@ -14,7 +14,7 @@ struct RootView: View {
         ZStack {
             if let container = app.activeContainer {
                 Group {
-                    if hasCompletedOnboarding || app.isDemoMode {
+                    if hasCompletedOnboarding || app.isDemoMode || app.storeHadDataAtLaunch {
                         MainTabView()
                     } else {
                         OnboardingView()
@@ -39,7 +39,15 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: lock.isLocked)
         .tint(Theme.accent)
         .preferredColorScheme(colorScheme)
+        .onAppear {
+            // Repair a missing onboarding flag when real data already exists.
+            if app.storeHadDataAtLaunch && !hasCompletedOnboarding && !app.isDemoMode { hasCompletedOnboarding = true }
+        }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active, let container = app.persistentContainer {
+                // Flush autosave-pending edits before iOS may suspend or terminate the app.
+                Persistence.flush(container.mainContext)
+            }
             if phase == .background {
                 lock.lockIfEnabled()
                 BackupService.cleanTemporaryExports()
