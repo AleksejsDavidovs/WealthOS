@@ -301,6 +301,101 @@ final class MarketDataService {
         return quotes[MarketQuote.key(provider: provider, symbol: holding.marketSymbol, currency: currency)]
     }
 
+    // MARK: Catalog
+
+    /// Minimum query lengths: Alpha Vantage spends 1 of 25 daily requests per search.
+    static func minimumQueryLength(for provider: MarketProvider) -> Int { provider == .alphaVantage ? 3 : 2 }
+
+    /// Searches the provider for listings. Results are cached for 24 h so repeating a search
+    /// (or switching between Stocks and ETFs, which share one Alpha Vantage search) is free.
+    /// Known ISINs are resolved via the built-in index; the provider still supplies listings.
+    func searchCatalog(_ rawQuery: String, filter: DiscoveryFilter, defaults cacheDefaults: UserDefaults? = nil,
+                       now: Date = .now) async throws -> [CatalogAsset] {
+        guard isEnabled else { throw MarketDataError.disabled }
+        var query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        var isin: String?
+        if filter != .crypto && ISIN.isValid(query) {
+            guard let shortcut = PopularAssets.query(forISIN: query) else { throw CatalogError.isinNotSupported }
+            isin = shortcut.isin
+            query = shortcut.query
+        }
+        let provider = filter.provider
+        guard query.count >= Self.minimumQueryLength(for: provider) else { return [] }
+        let cache = CatalogSearchCache(defaults: cacheDefaults ?? defaults)
+
+        var results: [CatalogAsset]
+        if let cached = cache.results(provider: provider, query: query, now: now) {
+            results = cached
+        } else {
+            var report = MarketRefreshReport()
+            switch provider {
+            case .coinGecko:
+                let data = try await send(try CoinGeckoAPI.searchRequest(query: query, apiKey: apiKey(for: .coinGecko)),
+                                          provider: .coinGecko, now: now, report: &report)
+                results = try CatalogParsing.coinGecko(data)
+            case .alphaVantage:
+                guard let key = apiKey(for: .alphaVantage) else { throw MarketDataError.missingAPIKey(.alphaVantage) }
+                let data = try await send(try AlphaVantageAPI.searchRequest(query: query, apiKey: key),
+                                          provider: .alphaVantage, now: now, report: &report)
+                results = try CatalogParsing.alphaVantage(data)
+            case .frankfurter:
+                results = []
+            }
+            cache.store(results, provider: provider, query: query, now: now)
+        }
+        if let isin {
+            results = results.map { var asset = $0; if asset.assetClass == .etf { asset.isin = isin }; return asset }
+        }
+        return results.filter(filter.includes)
+    }
+
+    /// Price for one listing in `currency` (crypto) or the listing currency (stocks/ETFs).
+    /// Uses the local quote cache first; otherwise one rate-limited request.
+    func quote(for asset: CatalogAsset, currency: String, context: ModelContext, now: Date = .now) async throws -> QuoteValue {
+        guard isEnabled else { throw MarketDataError.disabled }
+        let quoteCurrency = asset.provider == .coinGecko ? currency.uppercased() : (asset.holdingCurrency ?? currency.uppercased())
+        let key = MarketQuote.key(provider: asset.provider, symbol: asset.symbol, currency: quoteCurrency)
+        let existing = try? context.fetch(FetchDescriptor<MarketQuote>()).first { $0.key == key }
+        if let existing, now.timeIntervalSince(existing.fetchedAt) <= asset.provider.cacheTTL {
+            return existing.value
+        }
+        var report = MarketRefreshReport()
+        let value: QuoteValue
+        switch asset.provider {
+        case .coinGecko:
+            let data = try await send(try CoinGeckoAPI.priceRequest(ids: [asset.symbol], currency: quoteCurrency,
+                                                                    apiKey: apiKey(for: .coinGecko)),
+                                      provider: .coinGecko, now: now, report: &report)
+            guard let first = try CoinGeckoAPI.parsePrices(data, ids: [asset.symbol], currency: quoteCurrency, fetchedAt: now).quotes.first else {
+                throw MarketDataError.symbolNotFound(asset.symbol)
+            }
+            value = first
+        case .alphaVantage:
+            guard let apiKey = apiKey(for: .alphaVantage) else { throw MarketDataError.missingAPIKey(.alphaVantage) }
+            let data = try await send(try AlphaVantageAPI.quoteRequest(symbol: asset.symbol, apiKey: apiKey),
+                                      provider: .alphaVantage, now: now, report: &report)
+            value = try AlphaVantageAPI.parseQuote(data, symbol: asset.symbol, quoteCurrency: asset.currency ?? quoteCurrency, fetchedAt: now)
+        case .frankfurter:
+            throw MarketDataError.symbolNotFound(asset.symbol)
+        }
+        if let existing {
+            existing.price = value.price
+            existing.quoteTime = value.quoteTime
+            existing.fetchedAt = value.fetchedAt
+        } else {
+            context.insert(MarketQuote(provider: value.provider, symbol: value.symbol, currencyCode: value.currency,
+                                       price: value.price, quoteTime: value.quoteTime, fetchedAt: value.fetchedAt))
+        }
+        Persistence.flush(context)
+        return value
+    }
+
+    /// Quote-cache key for a listing (lets views look up cached prices without requests).
+    static func quoteKey(for asset: CatalogAsset, currency: String) -> String {
+        let quoteCurrency = asset.provider == .coinGecko ? currency.uppercased() : (asset.holdingCurrency ?? currency.uppercased())
+        return MarketQuote.key(provider: asset.provider, symbol: asset.symbol, currency: quoteCurrency)
+    }
+
     // MARK: Search
 
     func search(_ query: String, provider: MarketProvider, now: Date = .now) async throws -> [SymbolMatch] {

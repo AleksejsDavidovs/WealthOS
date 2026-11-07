@@ -225,7 +225,8 @@ struct SettingsView: View {
             try context.save()
             market.deleteAllKeys()
             marketEnabled = false
-            for key in [SettingsKey.estimatedIncome, SettingsKey.estimatedExpenses, SettingsKey.importedFileHashes] {
+            for key in [SettingsKey.estimatedIncome, SettingsKey.estimatedExpenses, SettingsKey.importedFileHashes,
+                        RecentAssetsStore.key, CatalogSearchCache.key] {
                 UserDefaults.standard.removeObject(forKey: key)
             }
             hasCompletedOnboarding = false

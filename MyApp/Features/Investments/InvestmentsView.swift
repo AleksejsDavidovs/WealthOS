@@ -23,8 +23,8 @@ struct InvestmentsView: View {
                         portfolioHeader(engine)
                         if engine.positions.isEmpty {
                             EmptyStateCard(title: "Track your portfolio",
-                                           message: "Add ETFs, stocks, crypto or other assets. Record buys and sells to calculate cost basis and profit.",
-                                           symbol: "chart.pie", actionTitle: "Add Holding") { showHoldingEditor = true }
+                                           message: "Find stocks, ETFs and crypto, record what you bought and follow cost basis, value and profit. No broker connection needed.",
+                                           symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
                         } else {
                             allocationCard(engine)
                             historyCard
@@ -47,10 +47,10 @@ struct InvestmentsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showHoldingEditor = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("Add holding")
+                        .accessibilityLabel("Add investment")
                 }
             }
-            .sheet(isPresented: $showHoldingEditor) { HoldingEditorView(holding: nil) }
+            .sheet(isPresented: $showHoldingEditor) { AssetDiscoveryView() }
             .sheet(isPresented: $showRates) { NavigationStack { ExchangeRatesView() } }
         }
     }
