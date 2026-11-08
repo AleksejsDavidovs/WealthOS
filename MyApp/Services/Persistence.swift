@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import SwiftUI
 import os
 
 enum Persistence {
@@ -51,6 +52,32 @@ enum Persistence {
             logger.error("Saving the data store failed (\((error as NSError).code, privacy: .public)).")
             return false
         }
+    }
+
+    /// Saves a user-initiated change. If saving fails, the unsaved edits are rolled back so
+    /// the UI never shows a change that wasn't persisted, and a user-facing error is thrown.
+    /// - Parameter save: injectable for tests; always `context.save()` in the app.
+    static func commit(_ context: ModelContext, save: (ModelContext) throws -> Void = { try $0.save() }) throws {
+        do {
+            try save(context)
+        } catch {
+            context.rollback()
+            logger.error("Saving a user change failed (\((error as NSError).code, privacy: .public)).")
+            throw PersistenceError.saveFailed
+        }
+    }
+
+    /// Performs `change` (which may itself save) and commits it. Any failure rolls back.
+    static func commit(_ context: ModelContext, save: (ModelContext) throws -> Void = { try $0.save() },
+                       _ change: () throws -> Void) throws {
+        do {
+            try change()
+        } catch {
+            context.rollback()
+            logger.error("Applying a user change failed (\((error as NSError).code, privacy: .public)).")
+            throw PersistenceError.saveFailed
+        }
+        try commit(context, save: save)
     }
 
     /// Whether the store already contains user data (used to never show onboarding over it).
@@ -108,5 +135,33 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .light: "Light"
         case .dark: "Dark"
         }
+    }
+
+    /// nil = follow the system setting.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    /// Window-level style; `.unspecified` follows the system setting.
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    static func resolve(_ rawValue: String) -> AppearanceMode { AppearanceMode(rawValue: rawValue) ?? .dark }
+}
+
+enum PersistenceError: LocalizedError, Equatable {
+    case saveFailed
+
+    var errorDescription: String? {
+        "Your change couldn't be saved, so nothing was changed. Please try again."
     }
 }

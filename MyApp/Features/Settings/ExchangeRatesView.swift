@@ -10,6 +10,7 @@ struct ExchangeRatesView: View {
     @Query private var holdings: [Holding]
     @State private var editingCode: String?
     @State private var addCode = "USD"
+    @State private var saveError: String?
     @Query private var quotes: [MarketQuote]
 
     private func marketQuote(_ code: String) -> MarketQuote? {
@@ -42,8 +43,12 @@ struct ExchangeRatesView: View {
                                             .font(.caption).foregroundStyle(Theme.accent)
                                         Button("Use") {
                                             if MarketPriceApplier.applyRate(quote.value, baseCurrency: baseCurrency, rates: rates, context: context) {
-                                                try? context.save()
-                                                DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                                                do {
+                                                    try Persistence.commit(context)
+                                                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                                                } catch {
+                                                    saveError = error.localizedDescription
+                                                }
                                             }
                                         }
                                         .font(.caption.weight(.semibold))
@@ -60,7 +65,13 @@ struct ExchangeRatesView: View {
                     .swipeActions {
                         if rate != nil && !usedCurrencies.contains(code) {
                             Button(role: .destructive) {
-                                if let rate { context.delete(rate); try? context.save() }
+                                if let rate {
+                                    do {
+                                        try Persistence.commit(context) { context.delete(rate) }
+                                    } catch {
+                                        saveError = error.localizedDescription
+                                    }
+                                }
                             } label: { Label("Delete", systemImage: "trash") }
                         }
                     }
@@ -95,6 +106,7 @@ struct ExchangeRatesView: View {
         .onAppear {
             if let first = Currencies.supported.first(where: { $0 != baseCurrency && !listedCodes.contains($0) }) { addCode = first }
         }
+        .saveErrorAlert($saveError)
     }
 }
 
@@ -108,6 +120,7 @@ struct RateEditorView: View {
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     let code: String
     @State private var text: String
+    @State private var saveError: String?
 
     init(code: String, existing: Decimal?) {
         self.code = code
@@ -133,13 +146,18 @@ struct RateEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let value = validation.value else { return }
-                        try? LedgerService.setRate(value, for: code, in: context)
-                        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                        dismiss()
+                        do {
+                            try Persistence.commit(context) { try LedgerService.setRate(value, for: code, in: context) }
+                            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                            dismiss()
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     .disabled(validation.value == nil)
                 }
             }
+            .saveErrorAlert($saveError)
         }
         .presentationDetents([.medium])
     }

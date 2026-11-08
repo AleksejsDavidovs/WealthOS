@@ -15,6 +15,7 @@ struct HoldingDetailView: View {
     @State private var showPriceUpdate = false
     @State private var showEditor = false
     @State private var showDelete = false
+    @State private var saveError: String?
 
     struct TradeRequest: Identifiable {
         let id = UUID()
@@ -111,13 +112,18 @@ struct HoldingDetailView: View {
         .sheet(isPresented: $showEditor) { HoldingEditorView(holding: holding) }
         .confirmationDialog("Delete \(holding.name)?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete Holding and Trades", role: .destructive) {
-                try? LedgerService.delete(holding: holding, in: context)
-                DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                dismiss()
+                do {
+                    try Persistence.commit(context) { try LedgerService.delete(holding: holding, in: context) }
+                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                    dismiss()
+                } catch {
+                    saveError = error.localizedDescription
+                }
             }
         } message: {
             Text("All \(trades.count) trade(s) and price history will be deleted. Cash movements recorded by these trades will be reversed on the funding accounts.")
         }
+        .saveErrorAlert($saveError)
     }
 
     private func summary(_ position: PositionSummary) -> some View {
@@ -192,6 +198,7 @@ struct HoldingEditorView: View {
     @State private var marketCurrency: String
     @State private var autoApply: Bool
     @State private var showSearch = false
+    @State private var saveError: String?
     @Environment(MarketDataService.self) private var market
     @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
 
@@ -301,6 +308,7 @@ struct HoldingEditorView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .saveErrorAlert($saveError)
             .sheet(isPresented: $showSearch) {
                 if let provider {
                     SymbolSearchView(provider: provider, initialQuery: symbol.isEmpty ? name : symbol) { match in
@@ -325,26 +333,31 @@ struct HoldingEditorView: View {
 
     private func save() {
         let price = priceText.isEmpty ? Decimal(0) : (priceValidation.value ?? 0)
-        if let holding {
-            let priceChanged = holding.currentPrice != price
-            holding.name = trimmedName
-            holding.symbol = symbol.trimmingCharacters(in: .whitespaces).uppercased()
-            holding.assetClass = assetClass
-            holding.accountID = accountID
-            holding.notes = notes
-            if priceChanged { try? LedgerService.updatePrice(of: holding, to: price, in: context) }
-            applyMarketFields(to: holding, manualPriceEntered: priceChanged)
-        } else {
-            let created = Holding(name: trimmedName, symbol: symbol.trimmingCharacters(in: .whitespaces).uppercased(),
-                                  assetClass: assetClass, currencyCode: currencyCode, currentPrice: price,
-                                  priceUpdatedAt: priceText.isEmpty ? nil : .now, accountID: accountID, notes: notes)
-            applyMarketFields(to: created, manualPriceEntered: false)
-            context.insert(created)
-            if !priceText.isEmpty { context.insert(PricePoint(holdingID: created.id, date: .now, price: price)) }
+        do {
+            try Persistence.commit(context) {
+                if let holding {
+                    let priceChanged = holding.currentPrice != price
+                    holding.name = trimmedName
+                    holding.symbol = symbol.trimmingCharacters(in: .whitespaces).uppercased()
+                    holding.assetClass = assetClass
+                    holding.accountID = accountID
+                    holding.notes = notes
+                    if priceChanged { try LedgerService.updatePrice(of: holding, to: price, in: context) }
+                    applyMarketFields(to: holding, manualPriceEntered: priceChanged)
+                } else {
+                    let created = Holding(name: trimmedName, symbol: symbol.trimmingCharacters(in: .whitespaces).uppercased(),
+                                          assetClass: assetClass, currencyCode: currencyCode, currentPrice: price,
+                                          priceUpdatedAt: priceText.isEmpty ? nil : .now, accountID: accountID, notes: notes)
+                    applyMarketFields(to: created, manualPriceEntered: false)
+                    context.insert(created)
+                    if !priceText.isEmpty { context.insert(PricePoint(holdingID: created.id, date: .now, price: price)) }
+                }
+            }
+            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+            dismiss()
+        } catch {
+            saveError = error.localizedDescription
         }
-        try? context.save()
-        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-        dismiss()
     }
 }
 
@@ -356,6 +369,7 @@ struct PriceUpdateView: View {
     @State private var priceText = ""
     @State private var date = Date.now
     @State private var saved = false
+    @State private var saveError: String?
 
     private var validation: AmountValidation { .price(priceText) }
 
@@ -378,15 +392,20 @@ struct PriceUpdateView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let price = validation.value else { return }
-                        try? LedgerService.updatePrice(of: holding, to: price, date: date, in: context)
-                        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                        saved = true
-                        dismiss()
+                        do {
+                            try Persistence.commit(context) { try LedgerService.updatePrice(of: holding, to: price, date: date, in: context) }
+                            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                            saved = true
+                            dismiss()
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     .disabled(validation.value == nil)
                 }
             }
             .sensoryFeedback(.success, trigger: saved)
+            .saveErrorAlert($saveError)
         }
         .presentationDetents([.medium])
     }

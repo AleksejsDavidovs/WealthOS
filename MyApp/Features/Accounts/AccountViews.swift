@@ -168,6 +168,7 @@ struct BalanceUpdateView: View {
     let currentBalance: Decimal
     @State private var text = ""
     @State private var date = Date.now
+    @State private var saveError: String?
 
     private var validation: AmountValidation { .money(text, allowZero: true, allowNegative: !account.kind.isLiability) }
 
@@ -195,13 +196,21 @@ struct BalanceUpdateView: View {
                     Button("Save") {
                         guard let value = validation.value else { return }
                         let target = account.kind.isLiability ? -value : value
-                        _ = try? LedgerService.adjustBalance(of: account, currentBalance: currentBalance, to: target, date: date, in: context)
-                        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                        dismiss()
+                        do {
+                            try Persistence.commit(context) {
+                                _ = try LedgerService.adjustBalance(of: account, currentBalance: currentBalance, to: target,
+                                                                    date: date, in: context)
+                            }
+                            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                            dismiss()
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     .disabled(validation.value == nil)
                 }
             }
+            .saveErrorAlert($saveError)
         }
         .presentationDetents([.medium])
     }

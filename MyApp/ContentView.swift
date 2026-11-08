@@ -7,7 +7,6 @@ struct RootView: View {
     @Environment(AppModel.self) private var app
     @Environment(AppLockManager.self) private var lock
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(SettingsKey.appearance) private var appearance = AppearanceMode.dark.rawValue
     @AppStorage(SettingsKey.hasCompletedOnboarding) private var hasCompletedOnboarding = false
 
     var body: some View {
@@ -38,7 +37,7 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: lock.isLocked)
         .tint(Theme.accent)
-        .preferredColorScheme(colorScheme)
+        .appAppearance()
         .onAppear {
             // Repair a missing onboarding flag when real data already exists.
             if app.storeHadDataAtLaunch && !hasCompletedOnboarding && !app.isDemoMode { hasCompletedOnboarding = true }
@@ -52,14 +51,6 @@ struct RootView: View {
                 lock.lockIfEnabled()
                 BackupService.cleanTemporaryExports()
             }
-        }
-    }
-
-    private var colorScheme: ColorScheme? {
-        switch AppearanceMode(rawValue: appearance) ?? .dark {
-        case .system: nil
-        case .light: .light
-        case .dark: .dark
         }
     }
 }

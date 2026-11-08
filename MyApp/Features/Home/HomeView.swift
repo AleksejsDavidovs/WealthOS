@@ -64,7 +64,9 @@ struct HomeView: View {
             .sheet(item: $editorRequest) { request in
                 TransactionEditorView(request: request)
             }
-            .sheet(isPresented: $showSettings) { SettingsView() }
+            // The sheet has its own presentation, so it applies the appearance itself to
+            // update immediately when the user switches System / Light / Dark inside it.
+            .sheet(isPresented: $showSettings) { SettingsView().appAppearance() }
             .sheet(isPresented: $showSnapshotEditor) { SnapshotEditorView() }
             .sheet(isPresented: $showAccountEditor) { AccountEditorView(account: nil) }
         }

@@ -24,6 +24,7 @@ struct TradeEditorView: View {
     @State private var cashAmountEdited = false
     @State private var note: String
     @State private var showDelete = false
+    @State private var saveError: String?
 
     init(holding: Holding, kind: TradeKind, trade: InvestmentTrade?) {
         self.holding = holding
@@ -133,13 +134,19 @@ struct TradeEditorView: View {
             .onAppear { suggestCashAmount() }
             .confirmationDialog("Delete this trade?", isPresented: $showDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
-                    if let trade { context.delete(trade); try? context.save() }
-                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                    dismiss()
+                    guard let trade else { dismiss(); return }
+                    do {
+                        try Persistence.commit(context) { context.delete(trade) }
+                        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                        dismiss()
+                    } catch {
+                        saveError = error.localizedDescription
+                    }
                 }
             } message: {
                 Text("The position and the linked cash account balance will be recalculated.")
             }
+            .saveErrorAlert($saveError)
         }
     }
 
@@ -157,24 +164,29 @@ struct TradeEditorView: View {
     private func save() {
         guard validationMessage == nil, let q = quantity.value, let p = price.value, let f = fee.value else { return }
         let cashAmount = cashAccount == nil ? nil : cashValidation.value
-        if let trade {
-            trade.kind = kind
-            trade.date = date
-            trade.quantity = q
-            trade.pricePerUnit = p
-            trade.fee = f
-            trade.cashAccountID = cashAccountID
-            trade.cashAmount = cashAmount
-            trade.note = note
-        } else {
-            context.insert(InvestmentTrade(holdingID: holding.id, kind: kind, date: date, quantity: q, pricePerUnit: p, fee: f,
-                                           cashAccountID: cashAccountID, cashAmount: cashAmount, note: note))
-            if holding.priceUpdatedAt == nil || holding.currentPrice == 0 {
-                try? LedgerService.updatePrice(of: holding, to: p, date: date, in: context)
+        do {
+            try Persistence.commit(context) {
+                if let trade {
+                    trade.kind = kind
+                    trade.date = date
+                    trade.quantity = q
+                    trade.pricePerUnit = p
+                    trade.fee = f
+                    trade.cashAccountID = cashAccountID
+                    trade.cashAmount = cashAmount
+                    trade.note = note
+                } else {
+                    context.insert(InvestmentTrade(holdingID: holding.id, kind: kind, date: date, quantity: q, pricePerUnit: p, fee: f,
+                                                   cashAccountID: cashAccountID, cashAmount: cashAmount, note: note))
+                    if holding.priceUpdatedAt == nil || holding.currentPrice == 0 {
+                        try LedgerService.updatePrice(of: holding, to: p, date: date, in: context)
+                    }
+                }
             }
+            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+            dismiss()
+        } catch {
+            saveError = error.localizedDescription
         }
-        try? context.save()
-        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-        dismiss()
     }
 }

@@ -276,3 +276,42 @@ extension Date {
         formatted(.relative(presentation: .named, unitsStyle: .wide))
     }
 }
+
+/// Applies the user's System / Light / Dark preference at the window level.
+///
+/// `preferredColorScheme` doesn't update sheets that are already presented, and switching
+/// it back to `nil` (System) doesn't clear an earlier explicit choice. Setting UIKit's
+/// `overrideUserInterfaceStyle` on the scene's windows updates the root view and every
+/// presented sheet immediately, and `.unspecified` correctly follows the system again.
+struct AppAppearanceModifier: ViewModifier {
+    @AppStorage(SettingsKey.appearance) private var appearance = AppearanceMode.dark.rawValue
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { Self.apply(AppearanceMode.resolve(appearance)) }
+            .onChange(of: appearance) { _, newValue in Self.apply(AppearanceMode.resolve(newValue)) }
+    }
+
+    static func apply(_ mode: AppearanceMode) {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = mode.interfaceStyle
+            }
+        }
+    }
+}
+
+extension View {
+    func appAppearance() -> some View { modifier(AppAppearanceModifier()) }
+
+    /// Alert for a failed user-initiated save. Set the binding to the error message.
+    func saveErrorAlert(_ message: Binding<String?>) -> some View {
+        alert("Couldn't Save", isPresented: Binding(get: { message.wrappedValue != nil },
+                                                    set: { if !$0 { message.wrappedValue = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(message.wrappedValue ?? "")
+        }
+    }
+}

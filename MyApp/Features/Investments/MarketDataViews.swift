@@ -264,6 +264,7 @@ struct HoldingMarketSection: View {
     @Query private var rates: [CurrencyRate]
     @Bindable var holding: Holding
     var onLink: () -> Void
+    @State private var saveError: String?
 
     private var quote: MarketQuote? {
         market.quote(for: holding, in: Dictionary(quotes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a }))
@@ -296,8 +297,12 @@ struct HoldingMarketSection: View {
                     if let converted, converted != holding.currentPrice || holding.priceSource == .manual {
                         Button {
                             if MarketPriceApplier.apply(quote.value, to: holding, converter: converter, context: context) {
-                                try? context.save()
-                                DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                                do {
+                                    try Persistence.commit(context)
+                                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                                } catch {
+                                    saveError = error.localizedDescription
+                                }
                             }
                         } label: {
                             Label("Use Market Price", systemImage: "arrow.down.to.line")
@@ -310,7 +315,13 @@ struct HoldingMarketSection: View {
                 }
                 Toggle("Update price automatically", isOn: Binding(
                     get: { holding.autoApplyMarketPrice },
-                    set: { holding.autoApplyMarketPrice = $0; try? context.save() }))
+                    set: { newValue in
+                        do {
+                            try Persistence.commit(context) { holding.autoApplyMarketPrice = newValue }
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
+                    }))
             } else {
                 Button("Link a Market Symbol…", systemImage: "link", action: onLink)
             }
@@ -321,6 +332,7 @@ struct HoldingMarketSection: View {
                  ? "Optional. Link a ticker or coin to compare your price with public market data."
                  : "Your price is only replaced when you tap “Use Market Price” or turn on automatic updates. Entering a price manually turns automatic updates off. Previous prices stay in the price history.")
         }
+        .saveErrorAlert($saveError)
     }
 }
 
