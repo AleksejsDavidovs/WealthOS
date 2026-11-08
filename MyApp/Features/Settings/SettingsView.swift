@@ -19,6 +19,7 @@ struct SettingsView: View {
     @Query private var categories: [TransactionCategory]
 
     @State private var pendingCurrency: String?
+    @State private var showPINSetup = false
     @State private var showBackupExport = false
     @State private var showBackupImporter = false
     @State private var backupFileData: IdentifiedData?
@@ -82,10 +83,23 @@ struct SettingsView: View {
                     })) {
                         Label("\(lock.biometryName) Lock", systemImage: lock.biometrySymbol)
                     }
+
+                    if lockEnabled {
+                        if lock.isPINEnabled {
+                            Button { showPINSetup = true } label: {
+                                Label("Change App PIN", systemImage: "number")
+                            }
+                            Button("Turn Off App PIN", role: .destructive) { lock.disablePIN() }
+                        } else {
+                            Button { showPINSetup = true } label: {
+                                Label("Set Up App PIN", systemImage: "number")
+                            }
+                        }
+                    }
                 } header: {
                     Text("Security")
                 } footer: {
-                    Text(lock.errorMessage ?? "Locks WealthOS whenever it goes to the background. Falls back to your device passcode. The app content is hidden in the app switcher.")
+                    Text(lock.errorMessage ?? "Locks WealthOS whenever it goes to the background. Falls back to your device passcode. The app content is hidden in the app switcher. An optional 6-digit PIN is available as a backup when \(lock.biometryName) isn't available.")
                 }
 
                 Section {
@@ -133,6 +147,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .sheet(isPresented: $showPINSetup) { PINSetupView() }
             .sheet(isPresented: $showBackupExport) { BackupExportView() }
             .sheet(item: $backupFileData) { BackupRestoreView(data: $0.data) }
             .sheet(item: $csvFileData) { CSVImportView(data: $0.data) }
@@ -347,7 +362,7 @@ struct PrivacyInfoView: View {
                 row("iphone", "On-device only", "All data is stored in an encrypted, file-protected database on this iPhone. There is no account, server or cloud sync.")
                 row("network.slash", "Offline by default", "WealthOS makes no network requests unless you turn on Market Data. Then it only downloads public prices over HTTPS from CoinGecko, Alpha Vantage and Frankfurter, sending nothing but ticker symbols and currency codes. API keys are stored in the iOS Keychain.")
                 row("eye.slash", "No tracking", "No analytics, telemetry, advertising or third-party SDKs. Logs never contain balances, names or transactions.")
-                row("faceid", "App lock", "Optional Face ID with passcode fallback. Content is hidden in the app switcher.")
+                row("faceid", "App lock", "Optional Face ID with passcode fallback and an optional 6-digit PIN as a backup. Content is hidden in the app switcher, and no open screen can be left visible behind the lock.")
                 row("lock.doc", "Encrypted backups", "Backups use AES-256-GCM with a key derived from your password (PBKDF2-SHA256, 600,000 iterations). If you forget the password, the backup cannot be recovered — not even by the developer.")
                 row("creditcard.trianglebadge.exclamationmark", "No credentials", "WealthOS never asks for bank logins, card numbers or passwords.")
             }

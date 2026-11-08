@@ -8,9 +8,10 @@ struct RootView: View {
     @Environment(AppLockManager.self) private var lock
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(SettingsKey.hasCompletedOnboarding) private var hasCompletedOnboarding = false
+    @State private var overlay = SecureOverlayWindow()
 
     var body: some View {
-        ZStack {
+        Group {
             if let container = app.activeContainer {
                 Group {
                     if hasCompletedOnboarding || app.isDemoMode || app.storeHadDataAtLaunch {
@@ -24,24 +25,24 @@ struct RootView: View {
             } else {
                 StoreErrorView(message: app.loadError ?? "Unknown error.")
             }
-
-            if lock.isLocked {
-                LockScreenView()
-                    .transition(.opacity)
-                    .zIndex(2)
-            } else if scenePhase != .active {
-                PrivacyCoverView()
-                    .transition(.opacity)
-                    .zIndex(3)
-            }
         }
-        .animation(.easeInOut(duration: 0.25), value: lock.isLocked)
+        .background(WindowAccessor { window in
+            overlay.attach(using: window)
+            AppAppearanceModifier.apply(AppearanceMode.resolve(UserDefaults.standard.string(forKey: SettingsKey.appearance) ?? ""))
+            updateOverlay()
+        })
         .tint(Theme.accent)
         .appAppearance()
         .onAppear {
             // Repair a missing onboarding flag when real data already exists.
             if app.storeHadDataAtLaunch && !hasCompletedOnboarding && !app.isDemoMode { hasCompletedOnboarding = true }
         }
+        .task {
+            // Exactly one automatic Face ID attempt for the lock session the app launched into.
+            lock.authenticateAutomatically()
+        }
+        .onChange(of: lock.isLocked) { _, _ in updateOverlay() }
+        .onChange(of: lock.showPINEntry) { _, _ in updateOverlay() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active, let container = app.persistentContainer {
                 // Flush autosave-pending edits before iOS may suspend or terminate the app.
@@ -51,6 +52,23 @@ struct RootView: View {
                 lock.lockIfEnabled()
                 BackupService.cleanTemporaryExports()
             }
+            if phase == .active {
+                lock.authenticateAutomatically()
+            }
+            updateOverlay()
+        }
+    }
+
+    /// Single source of truth for what the secure overlay window shows. Covers both the
+    /// lock screen and the app-switcher privacy cover, so neither can be bypassed by a sheet
+    /// left open underneath — the overlay sits in its own window above all UIKit presentations.
+    private func updateOverlay() {
+        if lock.isLocked {
+            overlay.show { LockScreenView().environment(lock) }
+        } else if scenePhase != .active {
+            overlay.show { PrivacyCoverView() }
+        } else {
+            overlay.hide()
         }
     }
 }
@@ -166,45 +184,152 @@ struct QuickAddToolbarMenu: View {
 
 struct LockScreenView: View {
     @Environment(AppLockManager.self) private var lock
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
             Theme.heroGradient.ignoresSafeArea()
-            VStack(spacing: 24) {
-                Spacer()
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 64, weight: .medium))
-                    .foregroundStyle(.white)
-                    .symbolRenderingMode(.hierarchical)
-                    .accessibilityHidden(true)
-                VStack(spacing: 6) {
-                    Text("WealthOS is Locked").font(.title2.bold()).foregroundStyle(.white)
-                    Text("Your financial data stays on this iPhone.").font(.subheadline).foregroundStyle(.white.opacity(0.75))
+            if lock.showPINEntry {
+                PINEntryView()
+            } else {
+                VStack(spacing: 24) {
+                    Spacer()
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 64, weight: .medium))
+                        .foregroundStyle(.white)
+                        .symbolRenderingMode(.hierarchical)
+                        .accessibilityHidden(true)
+                    VStack(spacing: 6) {
+                        Text("WealthOS is Locked").font(.title2.bold()).foregroundStyle(.white)
+                        Text("Your financial data stays on this iPhone.").font(.subheadline).foregroundStyle(.white.opacity(0.75))
+                    }
+                    if let message = lock.errorMessage {
+                        Text(message).font(.footnote).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    Spacer()
+                    Button {
+                        Task { await lock.authenticate() }
+                    } label: {
+                        Label("Unlock with \(lock.biometryName)", systemImage: lock.biometrySymbol)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .prominentButtonStyle()
+                    .controlSize(.large)
+                    .disabled(lock.isAuthenticating)
+                    .padding(.horizontal, 32)
+
+                    if lock.isPINEnabled {
+                        Button("Use PIN Instead") { lock.requestPINEntry() }
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.bottom, 40)
+                    } else {
+                        Color.clear.frame(height: 24)
+                    }
                 }
-                if let message = lock.errorMessage {
-                    Text(message).font(.footnote).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-                Spacer()
-                Button {
-                    Task { await lock.authenticate() }
-                } label: {
-                    Label("Unlock with \(lock.biometryName)", systemImage: lock.biometrySymbol)
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .prominentButtonStyle()
-                .controlSize(.large)
-                .disabled(lock.isAuthenticating)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 40)
             }
         }
-        .task {
-            if scenePhase == .active { await lock.authenticate() }
+    }
+}
+
+/// Six-digit PIN fallback shown on the lock screen after repeated Face ID failures, or on
+/// request. Hosted inside the same secure overlay window as `LockScreenView`, so it carries
+/// the same guarantee of never being bypassable by an open sheet underneath.
+struct PINEntryView: View {
+    @Environment(AppLockManager.self) private var lock
+    @State private var input = ""
+    @State private var statusMessage: String?
+    @State private var isError = false
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            Image(systemName: "number.circle.fill")
+                .font(.system(size: 56, weight: .medium))
+                .foregroundStyle(.white)
+                .symbolRenderingMode(.hierarchical)
+            Text("Enter Your PIN").font(.title2.bold()).foregroundStyle(.white)
+            PINDigitsField(value: $input, length: 6, tint: .white) { submit() }
+            if let statusMessage {
+                Text(statusMessage).font(.footnote)
+                    .foregroundStyle(isError ? .yellow : .white.opacity(0.85))
+                    .multilineTextAlignment(.center).padding(.horizontal, 32)
+            }
+            Spacer()
+            Button {
+                input = ""
+                lock.cancelPINEntry()
+                Task { await lock.authenticate() }
+            } label: {
+                Label("Use \(lock.biometryName) Instead", systemImage: lock.biometrySymbol)
+                    .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+            }
+            .prominentButtonStyle()
+            .controlSize(.large)
+            .padding(.horizontal, 32)
+            .padding(.bottom, 40)
         }
+    }
+
+    private func submit() {
+        let result = lock.verifyPIN(input)
+        input = ""
+        switch result {
+        case .success:
+            statusMessage = nil
+            isError = false
+        case .incorrect(let remaining):
+            isError = true
+            statusMessage = remaining > 0 ? "Incorrect PIN — \(remaining) attempt\(remaining == 1 ? "" : "s") left." : "Incorrect PIN."
+        case .lockedOut(let retryAfter):
+            isError = true
+            statusMessage = "Too many attempts. Try again in \(Self.format(retryAfter))."
+        case .notEnrolled:
+            isError = false
+            statusMessage = nil
+            lock.cancelPINEntry()
+        }
+    }
+
+    private static func format(_ interval: TimeInterval) -> String {
+        let minutes = Int((interval + 59) / 60)
+        return minutes >= 1 ? "\(minutes) min" : "\(Int(interval)) sec"
+    }
+}
+
+/// A row of masked digit indicators backed by an invisible numeric `SecureField`, used for
+/// both PIN entry and PIN creation. The PIN is held only in `value`, cleared by callers as
+/// soon as it's been checked or submitted — never logged, never written to disk by this view.
+struct PINDigitsField: View {
+    @Binding var value: String
+    let length: Int
+    var tint: Color = .primary
+    var onComplete: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack {
+            HStack(spacing: 16) {
+                ForEach(0..<length, id: \.self) { i in
+                    Circle()
+                        .fill(i < value.count ? tint : tint.opacity(0.2))
+                        .frame(width: 16, height: 16)
+                }
+            }
+            SecureField("", text: Binding(get: { value }, set: { newValue in
+                let digits = newValue.filter(\.isNumber)
+                value = String(digits.prefix(length))
+                if value.count == length { onComplete() }
+            }))
+            .keyboardType(.numberPad)
+            .focused($focused)
+            .opacity(0.02)
+            .frame(width: 1, height: 1)
+            .accessibilityLabel("PIN entry")
+        }
+        .onTapGesture { focused = true }
+        .onAppear { focused = true }
     }
 }
 
