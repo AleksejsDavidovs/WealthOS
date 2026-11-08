@@ -26,6 +26,12 @@ struct RootView: View {
                 StoreErrorView(message: app.loadError ?? "Unknown error.")
             }
         }
+        .overlay {
+            // Defense in depth for the first frames of a cold launch, before the overlay
+            // window is attached. No sheet can be open yet, so an in-window cover suffices
+            // here; once attached, the overlay window covers everything including sheets.
+            if lock.isLocked { PrivacyCoverView() }
+        }
         .background(WindowAccessor { window in
             overlay.attach(using: window)
             AppAppearanceModifier.apply(AppearanceMode.resolve(UserDefaults.standard.string(forKey: SettingsKey.appearance) ?? ""))
@@ -38,8 +44,8 @@ struct RootView: View {
             if app.storeHadDataAtLaunch && !hasCompletedOnboarding && !app.isDemoMode { hasCompletedOnboarding = true }
         }
         .task {
-            // Exactly one automatic Face ID attempt for the lock session the app launched into.
-            lock.authenticateAutomatically()
+            // Cold launch straight into .active fires no onChange; otherwise onChange handles it.
+            if scenePhase == .active { lock.authenticateAutomatically() }
         }
         .onChange(of: lock.isLocked) { _, _ in updateOverlay() }
         .onChange(of: lock.showPINEntry) { _, _ in updateOverlay() }
@@ -250,10 +256,12 @@ struct PINEntryView: View {
                 .foregroundStyle(.white)
                 .symbolRenderingMode(.hierarchical)
             Text("Enter Your PIN").font(.title2.bold()).foregroundStyle(.white)
-            PINDigitsField(value: $input, length: 6, tint: .white) { submit() }
-            if let statusMessage {
-                Text(statusMessage).font(.footnote)
-                    .foregroundStyle(isError ? .yellow : .white.opacity(0.85))
+            if lock.isPINUsable {
+                PINDigitsField(value: $input, length: AppPINManager.pinLength, tint: .white) { submit() }
+            }
+            if let message = statusMessage ?? (lock.isPINUsable ? nil : Self.disabledMessage) {
+                Text(message).font(.footnote)
+                    .foregroundStyle(isError || !lock.isPINUsable ? .yellow : .white.opacity(0.85))
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
             }
             Spacer()
@@ -267,10 +275,24 @@ struct PINEntryView: View {
             }
             .prominentButtonStyle()
             .controlSize(.large)
+            .disabled(lock.isAuthenticating)
             .padding(.horizontal, 32)
-            .padding(.bottom, 40)
+
+            // Recovery: the device passcode always works, so a forgotten PIN never locks
+            // the owner out of their data.
+            Button("Forgot PIN? Use Device Passcode") {
+                input = ""
+                Task { await lock.authenticateWithDevicePasscode() }
+            }
+            .font(.footnote)
+            .foregroundStyle(.white.opacity(0.85))
+            .disabled(lock.isAuthenticating)
+            .padding(.bottom, 32)
         }
+        .onDisappear { input = "" }
     }
+
+    private static let disabledMessage = "PIN disabled after too many attempts. Unlock with Face ID or your device passcode, then set a new PIN in Settings."
 
     private func submit() {
         let result = lock.verifyPIN(input)
@@ -285,6 +307,9 @@ struct PINEntryView: View {
         case .lockedOut(let retryAfter):
             isError = true
             statusMessage = "Too many attempts. Try again in \(Self.format(retryAfter))."
+        case .disabled:
+            isError = true
+            statusMessage = Self.disabledMessage
         case .notEnrolled:
             isError = false
             statusMessage = nil
@@ -293,8 +318,7 @@ struct PINEntryView: View {
     }
 
     private static func format(_ interval: TimeInterval) -> String {
-        let minutes = Int((interval + 59) / 60)
-        return minutes >= 1 ? "\(minutes) min" : "\(Int(interval)) sec"
+        interval < 60 ? "\(Int(interval.rounded(.up))) sec" : "\(Int((interval / 60).rounded(.up))) min"
     }
 }
 

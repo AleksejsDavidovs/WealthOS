@@ -6,7 +6,7 @@ import Observation
 /// cancellation and lockout without touching real biometric hardware.
 protocol BiometricAuthenticating: Sendable {
     func canEvaluate(_ policy: LAPolicy) -> Bool
-    func evaluate(_ policy: LAPolicy, reason: String) async throws -> Bool
+    func evaluate(_ policy: LAPolicy, reason: String, fallbackTitle: String?) async throws -> Bool
 }
 
 struct LAContextAuthenticator: BiometricAuthenticating {
@@ -14,36 +14,41 @@ struct LAContextAuthenticator: BiometricAuthenticating {
         LAContext().canEvaluatePolicy(policy, error: nil)
     }
 
-    func evaluate(_ policy: LAPolicy, reason: String) async throws -> Bool {
+    func evaluate(_ policy: LAPolicy, reason: String, fallbackTitle: String?) async throws -> Bool {
         let context = LAContext()
         context.localizedCancelTitle = "Cancel"
+        if let fallbackTitle { context.localizedFallbackTitle = fallbackTitle }
         return try await context.evaluatePolicy(policy, localizedReason: reason)
     }
 }
 
-/// Face ID / Touch ID with an optional six-digit app PIN as a secondary, offline fallback.
-/// No credentials are stored by the app in plaintext; see `AppPINManager` for the PIN's
-/// storage and rate-limiting design. The device passcode (via `LAPolicy.deviceOwnerAuthentication`)
-/// remains available as the ultimate recovery path whenever biometrics are unavailable.
+/// App lock state machine.
+///
+/// Unlock methods:
+/// - No app PIN: `.deviceOwnerAuthentication` — Face ID, with the system's own device-passcode
+///   fallback inside the same prompt (the pre-existing behavior).
+/// - App PIN set: Face ID only, with the prompt's fallback button relabeled "Use PIN". After
+///   repeated failures, lockout, or on request the PIN screen is offered, and the device
+///   passcode stays reachable from there, so a forgotten PIN never locks the owner out.
 @MainActor
 @Observable
 final class AppLockManager {
     var isLocked: Bool
-    var isAuthenticating = false
+    private(set) var isAuthenticating = false
     var errorMessage: String?
-
-    /// Failures of our own `evaluatePolicy` calls while unlocked, not a count of individual
-    /// Face ID match attempts inside one system prompt — LocalAuthentication deliberately
-    /// doesn't expose that. Reset whenever a new lock session starts or unlock succeeds.
-    private(set) var biometricFailureCount = 0
+    private(set) var isPINEnabled: Bool
     var showPINEntry = false
 
-    /// Armed once per lock session so the automatic Face ID prompt fires exactly once per
-    /// background→foreground cycle. Consumed on the first attempt; manual retries (the
-    /// "Unlock with Face ID" / "Use PIN" buttons) are never gated by this flag.
-    private var autoPromptArmed = true
-
+    /// Failed Face ID *prompts* this lock session. LocalAuthentication doesn't report
+    /// individual match attempts inside one prompt, so this counts our own calls.
+    private(set) var biometricFailureCount = 0
     static let maxBiometricFailuresBeforePIN = 3
+
+    /// Allows exactly one automatic prompt per lock session. Presenting Face ID itself makes
+    /// the scene go inactive→active, so without this the prompt would re-trigger itself.
+    private var autoPromptArmed = true
+    /// Bumped on every relock; a prompt that started in an older session can't unlock a newer one.
+    private var lockSession = 0
 
     let pin: AppPINManager
     private let biometrics: BiometricAuthenticating
@@ -52,10 +57,11 @@ final class AppLockManager {
         isLocked = UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled)
         self.biometrics = biometrics
         self.pin = pin
+        isPINEnabled = pin.isEnrolled
     }
 
     var isLockEnabled: Bool { UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled) }
-    var isPINEnabled: Bool { pin.isEnrolled }
+    var isPINUsable: Bool { isPINEnabled && !pin.isDisabledByFailures }
 
     var biometryName: String {
         let context = LAContext()
@@ -83,27 +89,26 @@ final class AppLockManager {
         biometrics.canEvaluate(.deviceOwnerAuthentication)
     }
 
-    /// Call when the app backgrounds. Starts a fresh lock session: the next foreground
-    /// transition gets exactly one automatic Face ID attempt.
+    /// Call when the app backgrounds. Starts a fresh lock session.
     func lockIfEnabled() {
         guard isLockEnabled else { return }
         isLocked = true
+        lockSession += 1
         autoPromptArmed = true
         biometricFailureCount = 0
         showPINEntry = false
         errorMessage = nil
     }
 
-    /// Triggers Face ID automatically, at most once per lock session. Safe to call on every
-    /// `scenePhase` change — it is a no-op unless locked, idle, and not yet consumed this session.
+    /// Safe to call on every activation: no-op unless locked, idle and not yet used this session.
     func authenticateAutomatically() {
-        guard isLocked, !isAuthenticating, autoPromptArmed else { return }
+        guard isLocked, !isAuthenticating, !showPINEntry, autoPromptArmed else { return }
         autoPromptArmed = false
         Task { await authenticate() }
     }
 
     func requestPINEntry() {
-        guard pin.isEnrolled else { return }
+        guard isPINEnabled else { return }
         showPINEntry = true
     }
 
@@ -111,32 +116,44 @@ final class AppLockManager {
         showPINEntry = false
     }
 
-    /// Prompts for authentication. Returns true on success.
+    /// Face ID (plus device passcode when no app PIN is set). Returns true on unlock.
     @discardableResult
     func authenticate(reason: String = "Unlock your financial data") async -> Bool {
-        guard !isAuthenticating else { return false }
-        let usesBiometricsOnly = biometrics.canEvaluate(.deviceOwnerAuthenticationWithBiometrics)
-        let policy: LAPolicy = usesBiometricsOnly ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication
+        let biometricsOnly = isPINUsable && biometrics.canEvaluate(.deviceOwnerAuthenticationWithBiometrics)
+        return await evaluateUnlock(policy: biometricsOnly ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication,
+                                    reason: reason, fallbackTitle: biometricsOnly ? "Use PIN" : nil)
+    }
 
+    /// Recovery path from the PIN screen: device passcode (or Face ID) via the system prompt.
+    @discardableResult
+    func authenticateWithDevicePasscode() async -> Bool {
+        await evaluateUnlock(policy: .deviceOwnerAuthentication, reason: "Unlock your financial data", fallbackTitle: nil)
+    }
+
+    private func evaluateUnlock(policy: LAPolicy, reason: String, fallbackTitle: String?) async -> Bool {
+        guard !isAuthenticating else { return false }
         guard biometrics.canEvaluate(policy) else {
-            if pin.isEnrolled {
+            if isPINUsable {
                 showPINEntry = true
-            } else {
-                // No passcode is set on the device, so the lock cannot be enforced.
+            } else if !biometrics.canEvaluate(.deviceOwnerAuthentication) {
+                // No device passcode exists, so iOS can't verify the owner at all and the lock
+                // can't be enforced (pre-existing policy; removing the passcode requires it).
                 errorMessage = "Set a device passcode in iOS Settings to use the app lock."
                 isLocked = false
             }
             return false
         }
 
+        let session = lockSession
         isAuthenticating = true
         defer { isAuthenticating = false }
         do {
-            let success = try await biometrics.evaluate(policy, reason: reason)
-            if success { unlock() }
-            return success
+            let success = try await biometrics.evaluate(policy, reason: reason, fallbackTitle: fallbackTitle)
+            guard success, session == lockSession, isLocked else { return false }
+            unlock()
+            return true
         } catch let laError as LAError {
-            handleFailure(laError, usedBiometricsOnly: usesBiometricsOnly)
+            handleFailure(laError, biometricsOnly: policy == .deviceOwnerAuthenticationWithBiometrics)
             return false
         } catch {
             errorMessage = "Authentication failed. Try again."
@@ -146,34 +163,50 @@ final class AppLockManager {
 
     @discardableResult
     func verifyPIN(_ candidate: String) -> PINVerificationResult {
+        guard isLocked else { return .notEnrolled }
         let result = pin.verify(candidate)
         if case .success = result { unlock() }
         return result
     }
 
+    /// Fresh device-owner authentication before any security-setting change, so someone
+    /// handed the already-unlocked app can't set, change or remove the lock or PIN.
+    func reauthorize(reason: String) async -> Bool {
+        guard !isAuthenticating else { return false }
+        guard biometrics.canEvaluate(.deviceOwnerAuthentication) else {
+            errorMessage = "Set a device passcode in iOS Settings to use the app lock."
+            return false
+        }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        return (try? await biometrics.evaluate(.deviceOwnerAuthentication, reason: reason, fallbackTitle: nil)) == true
+    }
+
+    /// Only call after `reauthorize` succeeded.
     func enrollPIN(_ newPIN: String) throws {
         try pin.enroll(newPIN)
+        isPINEnabled = true
     }
 
+    /// Only call after `reauthorize` succeeded.
     func disablePIN() {
         pin.disable()
+        isPINEnabled = false
+        showPINEntry = false
     }
 
-    /// Enabling the lock requires a successful authentication first.
+    /// Turning the lock on or off both require authenticating as the device owner.
     func setLockEnabled(_ enabled: Bool) async -> Bool {
-        if enabled {
-            guard biometrics.canEvaluate(.deviceOwnerAuthentication) else {
-                errorMessage = "Set a device passcode in iOS Settings to use the app lock."
-                return false
-            }
-            guard (try? await biometrics.evaluate(.deviceOwnerAuthentication,
-                                                   reason: "Enable the WealthOS lock")) == true else { return false }
+        if enabled || canAuthenticate {
+            let reason = enabled ? "Enable the WealthOS lock" : "Turn off the WealthOS lock"
+            guard await reauthorize(reason: reason) else { return false }
         }
         UserDefaults.standard.set(enabled, forKey: SettingsKey.lockEnabled)
         if !enabled {
             isLocked = false
-            errorMessage = nil
+            showPINEntry = false
         }
+        errorMessage = nil
         return true
     }
 
@@ -184,21 +217,24 @@ final class AppLockManager {
         showPINEntry = false
     }
 
-    private func handleFailure(_ error: LAError, usedBiometricsOnly: Bool) {
+    private func handleFailure(_ error: LAError, biometricsOnly: Bool) {
         switch error.code {
         case .userCancel, .appCancel, .systemCancel:
             errorMessage = nil
+        case .userFallback:
+            errorMessage = nil
+            if isPINUsable { showPINEntry = true }
         case .biometryLockout:
-            errorMessage = "\(biometryName) is temporarily unavailable after too many attempts."
-            if pin.isEnrolled { showPINEntry = true }
+            errorMessage = "\(biometryName) is temporarily locked. Use your PIN or device passcode."
+            if isPINUsable { showPINEntry = true }
         case .biometryNotAvailable, .biometryNotEnrolled, .passcodeNotSet:
             errorMessage = nil
-            if pin.isEnrolled { showPINEntry = true }
+            if isPINUsable { showPINEntry = true }
         default:
             errorMessage = "Authentication failed. Try again."
-            guard usedBiometricsOnly else { return }
+            guard biometricsOnly else { return }
             biometricFailureCount += 1
-            if biometricFailureCount >= Self.maxBiometricFailuresBeforePIN, pin.isEnrolled {
+            if biometricFailureCount >= Self.maxBiometricFailuresBeforePIN, isPINUsable {
                 showPINEntry = true
             }
         }

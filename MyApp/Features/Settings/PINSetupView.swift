@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Creates or replaces the app's 6-digit PIN fallback. Reached only from Settings, which is
-/// itself behind the app lock, so no extra re-authentication is required here: successfully
-/// opening Settings already proves the user passed Face ID / passcode / the existing PIN.
+/// Creates or replaces the app's 6-digit PIN fallback. Presented only after a fresh
+/// Face ID / device-passcode check (`AppLockManager.reauthorize`) or right after the lock
+/// was enabled, which itself required one.
 struct PINSetupView: View {
     @Environment(AppLockManager.self) private var lock
     @Environment(\.dismiss) private var dismiss
@@ -48,9 +48,14 @@ struct PINSetupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Not Now") { dismiss() }
                 }
             }
+        }
+        .interactiveDismissDisabled(stage == .confirm)
+        .onDisappear {
+            input = ""
+            firstEntry = ""
         }
     }
 

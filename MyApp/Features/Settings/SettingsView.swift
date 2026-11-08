@@ -78,7 +78,10 @@ struct SettingsView: View {
                 Section {
                     Toggle(isOn: Binding(get: { lockEnabled }, set: { newValue in
                         Task {
-                            if await lock.setLockEnabled(newValue) { lockEnabled = newValue }
+                            guard await lock.setLockEnabled(newValue) else { return }
+                            lockEnabled = newValue
+                            // First-time protection: offer the PIN backup right away (skippable).
+                            if newValue && !lock.isPINEnabled { showPINSetup = true }
                         }
                     })) {
                         Label("\(lock.biometryName) Lock", systemImage: lock.biometrySymbol)
@@ -86,12 +89,14 @@ struct SettingsView: View {
 
                     if lockEnabled {
                         if lock.isPINEnabled {
-                            Button { showPINSetup = true } label: {
+                            Button { authorizePINChange { showPINSetup = true } } label: {
                                 Label("Change App PIN", systemImage: "number")
                             }
-                            Button("Turn Off App PIN", role: .destructive) { lock.disablePIN() }
+                            Button("Turn Off App PIN", role: .destructive) {
+                                authorizePINChange { lock.disablePIN() }
+                            }
                         } else {
-                            Button { showPINSetup = true } label: {
+                            Button { authorizePINChange { showPINSetup = true } } label: {
                                 Label("Set Up App PIN", systemImage: "number")
                             }
                         }
@@ -203,6 +208,14 @@ struct SettingsView: View {
             completion(IdentifiedData(data: data))
         } catch {
             errorMessage = "The file couldn't be read."
+        }
+    }
+
+    /// Being inside the unlocked app isn't enough to set, change or remove the PIN — whoever
+    /// holds the phone must prove they're the device owner first.
+    private func authorizePINChange(_ action: @escaping () -> Void) {
+        Task {
+            if await lock.reauthorize(reason: "Change your WealthOS PIN settings") { action() }
         }
     }
 
