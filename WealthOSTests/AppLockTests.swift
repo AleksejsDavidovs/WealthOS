@@ -297,16 +297,64 @@ struct AppLockPINFallbackTests {
         #expect(lock.showPINEntry == false)
     }
 
-    @Test func correctPINUnlocks() throws {
+    @Test func correctPINUnlocks() async throws {
         let lock = try AppLockTestSupport.lockedManager(MockBiometricAuthenticator(), pin: "778899")
-        #expect(lock.verifyPIN("778899") == .success)
+        #expect(await lock.verifyPIN("778899") == .success)
         #expect(lock.isLocked == false)
     }
 
-    @Test func wrongPINKeepsTheAppLocked() throws {
+    @Test func wrongPINKeepsTheAppLocked() async throws {
         let lock = try AppLockTestSupport.lockedManager(MockBiometricAuthenticator(), pin: "778899")
-        #expect(lock.verifyPIN("000000") == .incorrect(remainingBeforeLockout: 2))
+        #expect(await lock.verifyPIN("000000") == .incorrect(remainingBeforeLockout: 2))
         #expect(lock.isLocked == true)
+    }
+
+    @Test func pinIsIgnoredWhenTheAppIsNotLocked() async throws {
+        let lock = try AppLockTestSupport.lockedManager(MockBiometricAuthenticator(), pin: "778899")
+        lock.isLocked = false
+        #expect(await lock.verifyPIN("000000") == nil)
+        #expect(lock.pinLockoutRemaining() == nil, "an ignored check must not count as an attempt")
+    }
+
+    @Test func overlappingPINChecksAreRejected() async throws {
+        let lock = try AppLockTestSupport.lockedManager(MockBiometricAuthenticator(), pin: "778899")
+
+        async let first = lock.verifyPIN("000000")
+        await AppLockTestSupport.waitUntil { lock.isVerifyingPIN }
+        let second = await lock.verifyPIN("000000")
+        let firstResult = await first
+
+        #expect(second == nil, "a second check while one runs would race on the attempt counter")
+        #expect(firstResult == .incorrect(remainingBeforeLockout: 2))
+    }
+
+    /// The reported bug: with a PIN set and Face ID unavailable (lockout, covered, not
+    /// enrolled), unlocking fell through to Apple's passcode sheet instead of the PIN pad.
+    @Test func faceIDUnavailableWithPINGoesToPINPadNotSystemPasscode() async throws {
+        let bio = MockBiometricAuthenticator()
+        bio.canEvaluateBiometrics = false
+        let lock = try AppLockTestSupport.lockedManager(bio, pin: "778899")
+
+        let unlocked = await lock.authenticate()
+
+        #expect(unlocked == false)
+        #expect(lock.showPINEntry == true)
+        #expect(bio.evaluateCallCount == 0, "no system prompt — the WealthOS PIN is the fallback")
+        #expect(lock.isLocked == true)
+    }
+
+    @Test func pinDisabledByFailuresFallsBackToSystemAuthentication() async throws {
+        let bio = MockBiometricAuthenticator()
+        let pin = AppPINManager(store: MemorySecrets())
+        try pin.enroll("778899")
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        for _ in 0..<AppPINManager.maxTotalFailures { _ = pin.verify("000000", now: clock); clock.addTimeInterval(3_600) }
+        let lock = AppLockManager(biometrics: bio, pin: pin)
+        lock.isLocked = true
+
+        _ = await lock.authenticate()
+
+        #expect(bio.prompts.last?.policy == .deviceOwnerAuthentication)
     }
 
     @Test func devicePasscodeRecoveryUnlocksWhenPINIsForgotten() async throws {
@@ -327,10 +375,10 @@ struct AppLockPINFallbackTests {
 @MainActor
 @Suite("App lock — security settings require re-authentication", .serialized)
 struct AppLockAuthorizationTests {
-    @Test func pinEnabledFlagIsObservableAcrossEnrollAndDisable() throws {
+    @Test func pinEnabledFlagIsObservableAcrossEnrollAndDisable() async throws {
         let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: MemorySecrets()))
         #expect(lock.isPINEnabled == false)
-        try lock.enrollPIN("135790")
+        try await lock.enrollPIN("135790")
         #expect(lock.isPINEnabled == true)
         lock.disablePIN()
         #expect(lock.isPINEnabled == false)
@@ -562,6 +610,25 @@ struct AppPINManagerTests {
         let result = manager.verify("246810", now: start)
 
         if case .lockedOut = result {} else { Issue.record("expected fail-closed .lockedOut, got \(result)") }
+    }
+
+    @Test func lockoutRemainingCountsDownAndIsReadOnly() throws {
+        let manager = AppPINManager(store: MemorySecrets())
+        try manager.enroll("246810")
+        #expect(manager.lockoutRemaining(now: start) == nil)
+        for _ in 0..<3 { _ = manager.verify("111111", now: start) }
+
+        // Polling the countdown every second must never count as a guess.
+        for second in 0..<20 { _ = manager.lockoutRemaining(now: start.addingTimeInterval(Double(second))) }
+        #expect(manager.lockoutRemaining(now: start.addingTimeInterval(12)) == 18)
+        #expect(manager.lockoutRemaining(now: start.addingTimeInterval(31)) == nil)
+        #expect(manager.verify("111111", now: start.addingTimeInterval(31)) == .lockedOut(retryAfter: 60),
+                "fourth failure → next step, proving polling added no attempts")
+    }
+
+    @Test func countdownTextFormatsMinutesAndSeconds() {
+        #expect((27.2 as TimeInterval).countdownText == "0:28")
+        #expect((300 as TimeInterval).countdownText == "5:00")
     }
 
     @Test func disableRemovesOnlyPINData() throws {

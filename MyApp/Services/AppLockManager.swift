@@ -37,6 +37,7 @@ final class AppLockManager {
     private(set) var isAuthenticating = false
     var errorMessage: String?
     private(set) var isPINEnabled: Bool
+    private(set) var isVerifyingPIN = false
     var showPINEntry = false
 
     /// Failed Face ID *prompts* this lock session. LocalAuthentication doesn't report
@@ -116,12 +117,21 @@ final class AppLockManager {
         showPINEntry = false
     }
 
-    /// Face ID (plus device passcode when no app PIN is set). Returns true on unlock.
+    var canUseBiometrics: Bool { biometrics.canEvaluate(.deviceOwnerAuthenticationWithBiometrics) }
+
+    /// With a usable app PIN: Face ID only, and the WealthOS PIN is the fallback — including
+    /// when Face ID is locked out or unavailable. Without one: `.deviceOwnerAuthentication`,
+    /// whose only fallback is Apple's system passcode sheet. Returns true on unlock.
     @discardableResult
     func authenticate(reason: String = "Unlock your financial data") async -> Bool {
-        let biometricsOnly = isPINUsable && biometrics.canEvaluate(.deviceOwnerAuthenticationWithBiometrics)
-        return await evaluateUnlock(policy: biometricsOnly ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication,
-                                    reason: reason, fallbackTitle: biometricsOnly ? "Use PIN" : nil)
+        guard isPINUsable else {
+            return await evaluateUnlock(policy: .deviceOwnerAuthentication, reason: reason, fallbackTitle: nil)
+        }
+        guard canUseBiometrics else {
+            showPINEntry = true
+            return false
+        }
+        return await evaluateUnlock(policy: .deviceOwnerAuthenticationWithBiometrics, reason: reason, fallbackTitle: "Use PIN")
     }
 
     /// Recovery path from the PIN screen: device passcode (or Face ID) via the system prompt.
@@ -161,12 +171,24 @@ final class AppLockManager {
         }
     }
 
+    /// Checks the PIN off the main thread (PBKDF2 takes ~100 ms) so the keypad can animate.
+    /// Returns nil if ignored: not locked, or a check is already running — concurrent checks
+    /// would race on the attempt counter.
     @discardableResult
-    func verifyPIN(_ candidate: String) -> PINVerificationResult {
-        guard isLocked else { return .notEnrolled }
-        let result = pin.verify(candidate)
-        if case .success = result { unlock() }
+    func verifyPIN(_ candidate: String) async -> PINVerificationResult? {
+        guard isLocked, !isVerifyingPIN else { return nil }
+        isVerifyingPIN = true
+        defer { isVerifyingPIN = false }
+        let session = lockSession
+        let pin = self.pin
+        let result = await Task.detached(priority: .userInitiated) { pin.verify(candidate) }.value
+        if case .success = result, session == lockSession, isLocked { unlock() }
         return result
+    }
+
+    /// Remaining PIN lockout, if any. Read-only: never counts as an attempt.
+    func pinLockoutRemaining(now: Date = .now) -> TimeInterval? {
+        pin.lockoutRemaining(now: now)
     }
 
     /// Fresh device-owner authentication before any security-setting change, so someone
@@ -182,9 +204,10 @@ final class AppLockManager {
         return (try? await biometrics.evaluate(.deviceOwnerAuthentication, reason: reason, fallbackTitle: nil)) == true
     }
 
-    /// Only call after `reauthorize` succeeded.
-    func enrollPIN(_ newPIN: String) throws {
-        try pin.enroll(newPIN)
+    /// Only call after `reauthorize` succeeded. Hashing runs off the main thread.
+    func enrollPIN(_ newPIN: String) async throws {
+        let pin = self.pin
+        try await Task.detached(priority: .userInitiated) { try pin.enroll(newPIN) }.value
         isPINEnabled = true
     }
 

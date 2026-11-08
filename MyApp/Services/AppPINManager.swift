@@ -119,6 +119,14 @@ final class AppPINManager: @unchecked Sendable {
         return .incorrect(remainingBeforeLockout: max(0, Self.attemptsBeforeFirstDelay - pending.failedAttempts))
     }
 
+    /// Seconds until the next attempt is allowed, or nil. Reads state only; never an attempt.
+    func lockoutRemaining(now: Date = .now) -> TimeInterval? {
+        let state = loadState()
+        let remaining = state.lockedUntil - now.timeIntervalSince1970
+        guard remaining > 0 else { return nil }
+        return min(remaining, Self.lockoutDuration(forFailedAttempts: state.failedAttempts))
+    }
+
     static func lockoutDuration(forFailedAttempts failures: Int) -> TimeInterval {
         switch failures {
         case ..<3: return 0

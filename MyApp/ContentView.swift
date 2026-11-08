@@ -196,6 +196,7 @@ struct LockScreenView: View {
             Theme.heroGradient.ignoresSafeArea()
             if lock.showPINEntry {
                 PINEntryView()
+                    .transition(.opacity)
             } else {
                 VStack(spacing: 24) {
                     Spacer()
@@ -227,133 +228,137 @@ struct LockScreenView: View {
                     .padding(.horizontal, 32)
 
                     if lock.isPINEnabled {
-                        Button("Use PIN Instead") { lock.requestPINEntry() }
-                            .foregroundStyle(.white.opacity(0.85))
-                            .padding(.bottom, 40)
+                        Button { lock.requestPINEntry() } label: {
+                            Label("Enter WealthOS PIN", systemImage: "circle.grid.3x3.fill")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.bottom, 40)
                     } else {
-                        Color.clear.frame(height: 24)
+                        // Without an app PIN the only fallback is Apple's passcode sheet; say so.
+                        Text("Falls back to your iPhone passcode. Set up a WealthOS PIN in Settings to use it instead.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                            .padding(.bottom, 32)
                     }
                 }
+                .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: lock.showPINEntry)
     }
 }
 
-/// Six-digit PIN fallback shown on the lock screen after repeated Face ID failures, or on
-/// request. Hosted inside the same secure overlay window as `LockScreenView`, so it carries
-/// the same guarantee of never being bypassable by an open sheet underneath.
+/// Full-screen WealthOS PIN unlock. Rendered inside `SecureOverlayWindow` (as part of
+/// `LockScreenView`), so no sheet or financial content can appear above or behind it.
+/// The digits exist only in `digits` and are cleared after every check and on disappear.
 struct PINEntryView: View {
     @Environment(AppLockManager.self) private var lock
-    @State private var input = ""
-    @State private var statusMessage: String?
-    @State private var isError = false
+    @State private var digits = ""
+    @State private var feedback: PINPadFeedback = .idle
+    @State private var shakeTrigger = 0
+    @State private var message: String?
+
+    private static let disabledMessage = "PIN disabled after too many attempts. Use Face ID or your iPhone passcode, then set a new PIN in Settings."
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image(systemName: "number.circle.fill")
-                .font(.system(size: 56, weight: .medium))
-                .foregroundStyle(.white)
-                .symbolRenderingMode(.hierarchical)
-            Text("Enter Your PIN").font(.title2.bold()).foregroundStyle(.white)
-            if lock.isPINUsable {
-                PINDigitsField(value: $input, length: AppPINManager.pinLength, tint: .white) { submit() }
-            }
-            if let message = statusMessage ?? (lock.isPINUsable ? nil : Self.disabledMessage) {
-                Text(message).font(.footnote)
-                    .foregroundStyle(isError || !lock.isPINUsable ? .yellow : .white.opacity(0.85))
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            }
-            Spacer()
-            Button {
-                input = ""
-                lock.cancelPINEntry()
-                Task { await lock.authenticate() }
-            } label: {
-                Label("Use \(lock.biometryName) Instead", systemImage: lock.biometrySymbol)
-                    .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
-            }
-            .prominentButtonStyle()
-            .controlSize(.large)
-            .disabled(lock.isAuthenticating)
-            .padding(.horizontal, 32)
-
-            // Recovery: the device passcode always works, so a forgotten PIN never locks
-            // the owner out of their data.
-            Button("Forgot PIN? Use Device Passcode") {
-                input = ""
-                Task { await lock.authenticateWithDevicePasscode() }
-            }
-            .font(.footnote)
-            .foregroundStyle(.white.opacity(0.85))
-            .disabled(lock.isAuthenticating)
-            .padding(.bottom, 32)
-        }
-        .onDisappear { input = "" }
-    }
-
-    private static let disabledMessage = "PIN disabled after too many attempts. Unlock with Face ID or your device passcode, then set a new PIN in Settings."
-
-    private func submit() {
-        let result = lock.verifyPIN(input)
-        input = ""
-        switch result {
-        case .success:
-            statusMessage = nil
-            isError = false
-        case .incorrect(let remaining):
-            isError = true
-            statusMessage = remaining > 0 ? "Incorrect PIN — \(remaining) attempt\(remaining == 1 ? "" : "s") left." : "Incorrect PIN."
-        case .lockedOut(let retryAfter):
-            isError = true
-            statusMessage = "Too many attempts. Try again in \(Self.format(retryAfter))."
-        case .disabled:
-            isError = true
-            statusMessage = Self.disabledMessage
-        case .notEnrolled:
-            isError = false
-            statusMessage = nil
-            lock.cancelPINEntry()
-        }
-    }
-
-    private static func format(_ interval: TimeInterval) -> String {
-        interval < 60 ? "\(Int(interval.rounded(.up))) sec" : "\(Int((interval / 60).rounded(.up))) min"
-    }
-}
-
-/// A row of masked digit indicators backed by an invisible numeric `SecureField`, used for
-/// both PIN entry and PIN creation. The PIN is held only in `value`, cleared by callers as
-/// soon as it's been checked or submitted — never logged, never written to disk by this view.
-struct PINDigitsField: View {
-    @Binding var value: String
-    let length: Int
-    var tint: Color = .primary
-    var onComplete: () -> Void
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        ZStack {
-            HStack(spacing: 16) {
-                ForEach(0..<length, id: \.self) { i in
-                    Circle()
-                        .fill(i < value.count ? tint : tint.opacity(0.2))
-                        .frame(width: 16, height: 16)
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let lockout = lock.isPINUsable ? lock.pinLockoutRemaining(now: context.date) : nil
+            PINPadScreen(
+                icon: feedback == .success ? "lock.open.fill" : "lock.fill",
+                title: "Enter WealthOS PIN",
+                subtitle: "Your 6-digit app PIN — not your iPhone passcode.",
+                filled: digits.count,
+                feedback: feedback,
+                shakeTrigger: shakeTrigger,
+                message: statusMessage(lockout: lockout),
+                messageIsError: !lock.isPINUsable || lockout != nil || feedback == .error,
+                keypadEnabled: lock.isPINUsable && lockout == nil && !lock.isVerifyingPIN && feedback != .success,
+                leadingKey: lock.canUseBiometrics
+                    ? .init(symbol: lock.biometrySymbol, label: "Use \(lock.biometryName)", action: useBiometrics)
+                    : nil,
+                onDigit: append,
+                onDelete: { if !digits.isEmpty { digits.removeLast() } }
+            ) {
+                VStack(spacing: 4) {
+                    Button(action: useDevicePasscode) {
+                        Label("Forgot PIN? Use iPhone Passcode", systemImage: "key.fill")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(PINPadStyle.turquoise)
+                    .disabled(lock.isAuthenticating || lock.isVerifyingPIN)
+                    .accessibilityHint("Opens Apple's secure passcode screen. Your WealthOS PIN is not changed.")
+                    Text("Opens Apple's secure iPhone passcode screen.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .accessibilityHidden(true)
                 }
             }
-            SecureField("", text: Binding(get: { value }, set: { newValue in
-                let digits = newValue.filter(\.isNumber)
-                value = String(digits.prefix(length))
-                if value.count == length { onComplete() }
-            }))
-            .keyboardType(.numberPad)
-            .focused($focused)
-            .opacity(0.02)
-            .frame(width: 1, height: 1)
-            .accessibilityLabel("PIN entry")
         }
-        .onTapGesture { focused = true }
-        .onAppear { focused = true }
+        .onDisappear(perform: clear)
+    }
+
+    private func statusMessage(lockout: TimeInterval?) -> String? {
+        if !lock.isPINUsable { return Self.disabledMessage }
+        if let lockout { return "Too many attempts. Try again in \(lockout.countdownText)." }
+        return message
+    }
+
+    private func append(_ digit: Int) {
+        guard digits.count < AppPINManager.pinLength else { return }
+        if feedback == .error { feedback = .idle; message = nil }
+        digits.append(String(digit))
+        if digits.count == AppPINManager.pinLength { submit() }
+    }
+
+    private func submit() {
+        let candidate = digits
+        Task {
+            guard let result = await lock.verifyPIN(candidate) else { return }
+            switch result {
+            case .success:
+                feedback = .success   // the overlay fades out over this state
+                message = nil
+            case .incorrect(let remaining):
+                reject(remaining > 0
+                       ? "Incorrect PIN · \(remaining) attempt\(remaining == 1 ? "" : "s") before a delay"
+                       : "Incorrect PIN")
+            case .lockedOut, .disabled:
+                reject(nil)            // the countdown / disabled text takes over
+            case .notEnrolled:
+                clear()
+                lock.cancelPINEntry()
+            }
+        }
+    }
+
+    private func reject(_ text: String?) {
+        feedback = .error
+        message = text
+        shakeTrigger += 1
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            digits = ""
+        }
+    }
+
+    private func useBiometrics() {
+        clear()
+        lock.cancelPINEntry()
+        Task { await lock.authenticate() }
+    }
+
+    private func useDevicePasscode() {
+        clear()
+        Task { await lock.authenticateWithDevicePasscode() }
+    }
+
+    private func clear() {
+        digits = ""
+        feedback = .idle
+        message = nil
     }
 }
 

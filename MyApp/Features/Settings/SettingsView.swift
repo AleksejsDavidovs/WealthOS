@@ -152,7 +152,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .sheet(isPresented: $showPINSetup) { PINSetupView() }
+            .fullScreenCover(isPresented: $showPINSetup) { PINSetupView() }
             .sheet(isPresented: $showBackupExport) { BackupExportView() }
             .sheet(item: $backupFileData) { BackupRestoreView(data: $0.data) }
             .sheet(item: $csvFileData) { CSVImportView(data: $0.data) }

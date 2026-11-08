@@ -1,93 +1,132 @@
 import SwiftUI
 
-/// Creates or replaces the app's 6-digit PIN fallback. Presented only after a fresh
-/// Face ID / device-passcode check (`AppLockManager.reauthorize`) or right after the lock
-/// was enabled, which itself required one.
+/// Creates or replaces the WealthOS PIN with the same full-screen pad used to unlock.
+/// Presented as a full-screen cover only after a fresh Face ID / passcode check
+/// (`AppLockManager.reauthorize`) or right after the lock was enabled, which required one.
+/// If the app locks meanwhile, the secure overlay window covers this screen too.
 struct PINSetupView: View {
     @Environment(AppLockManager.self) private var lock
     @Environment(\.dismiss) private var dismiss
-    @State private var stage: Stage = .enter
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var stage: Stage = .create
     @State private var firstEntry = ""
-    @State private var input = ""
-    @State private var errorMessage: String?
+    @State private var digits = ""
+    @State private var feedback: PINPadFeedback = .idle
+    @State private var shakeTrigger = 0
+    @State private var message: String?
+    @State private var isSaving = false
 
-    private enum Stage { case enter, confirm }
+    private enum Stage { case create, confirm }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                Spacer()
-                Image(systemName: "number.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(Theme.accent)
-                Text(stage == .enter ? "Create a 6-Digit PIN" : "Confirm Your PIN")
-                    .font(.title2.bold())
-                Text("Used as a backup when \(lock.biometryName) isn't available. \(lock.biometryName) and your device passcode remain the primary ways to unlock WealthOS.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-
-                PINDigitsField(value: $input, length: 6, tint: Theme.accent) { submit() }
-
-                if let errorMessage {
-                    Text(errorMessage).font(.footnote).foregroundStyle(.red)
-                }
-
-                Spacer()
-
-                Text("If you forget your PIN, unlock with \(lock.biometryName) or your device passcode, then set a new PIN from Settings. Your financial data is never deleted after failed attempts.")
+        PINPadScreen(
+            icon: feedback == .success ? "checkmark.shield.fill" : (stage == .create ? "circle.grid.3x3.fill" : "checkmark.shield"),
+            title: title,
+            subtitle: stage == .create
+                ? "Used when \(lock.biometryName) isn't available. It's separate from your iPhone passcode."
+                : "Enter the same 6 digits again.",
+            filled: digits.count,
+            feedback: feedback,
+            shakeTrigger: shakeTrigger,
+            message: message,
+            messageIsError: feedback == .error,
+            keypadEnabled: !isSaving && feedback != .success,
+            onDigit: append,
+            onDelete: { if !digits.isEmpty { digits.removeLast() } }
+        ) {
+            VStack(spacing: 10) {
+                Text("If you forget it, unlock with \(lock.biometryName) or your iPhone passcode, then set a new PIN here. Your data is never deleted after wrong attempts.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.5))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 20)
-            }
-            .padding()
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Not Now") { dismiss() }
+                    .padding(.horizontal, 36)
+                Button("Not Now") {
+                    clear()
+                    dismiss()
                 }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PINPadStyle.turquoise)
+                .disabled(isSaving)
             }
         }
-        .interactiveDismissDisabled(stage == .confirm)
-        .onDisappear {
-            input = ""
-            firstEntry = ""
+        .animation(.easeInOut(duration: 0.2), value: stage)
+        // Don't keep a half-entered PIN around while the app is covered or backgrounded.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active && !isSaving { restart(message: nil) }
+        }
+        .onDisappear(perform: clear)
+    }
+
+    private var title: String {
+        switch stage {
+        case .create: lock.isPINEnabled ? "New WealthOS PIN" : "Create WealthOS PIN"
+        case .confirm: "Confirm WealthOS PIN"
         }
     }
 
-    private func submit() {
-        guard AppPINManager.isValidFormat(input) else {
-            errorMessage = "Enter exactly six digits."
-            input = ""
-            return
-        }
+    private func append(_ digit: Int) {
+        guard digits.count < AppPINManager.pinLength, !isSaving else { return }
+        if feedback == .error { feedback = .idle; message = nil }
+        digits.append(String(digit))
+        guard digits.count == AppPINManager.pinLength else { return }
+
         switch stage {
-        case .enter:
-            firstEntry = input
-            input = ""
-            errorMessage = nil
-            stage = .confirm
+        case .create:
+            let entered = digits
+            Task {
+                try? await Task.sleep(for: .milliseconds(180))   // let the sixth dot land
+                guard stage == .create, digits == entered else { return }
+                firstEntry = entered
+                digits = ""
+                stage = .confirm
+            }
         case .confirm:
-            guard input == firstEntry else {
-                errorMessage = "PINs don't match. Try again."
-                input = ""
-                firstEntry = ""
-                stage = .enter
+            guard digits == firstEntry else {
+                feedback = .error
+                shakeTrigger += 1
+                message = "PINs didn't match. Start again."
+                Task {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    restart(message: "PINs didn't match. Start again.")
+                }
                 return
             }
+            save(digits)
+        }
+    }
+
+    private func save(_ newPIN: String) {
+        isSaving = true
+        Task {
             do {
-                try lock.enrollPIN(input)
-                input = ""
-                firstEntry = ""
+                try await lock.enrollPIN(newPIN)
+                feedback = .success
+                message = "WealthOS PIN saved."
+                try? await Task.sleep(for: .milliseconds(650))
+                clear()
                 dismiss()
             } catch {
-                errorMessage = error.localizedDescription
-                input = ""
+                isSaving = false
+                feedback = .error
+                shakeTrigger += 1
+                message = error.localizedDescription
+                try? await Task.sleep(for: .milliseconds(450))
+                restart(message: error.localizedDescription)
             }
         }
+    }
+
+    private func restart(message newMessage: String?) {
+        clear()
+        message = newMessage
+        if newMessage != nil { feedback = .error }
+    }
+
+    private func clear() {
+        digits = ""
+        firstEntry = ""
+        stage = .create
+        feedback = .idle
+        message = nil
     }
 }
