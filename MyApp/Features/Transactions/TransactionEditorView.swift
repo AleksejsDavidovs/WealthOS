@@ -27,6 +27,8 @@ struct TransactionEditorView: View {
     @State private var saveCount = 0
     @State private var saveError: String?
     @FocusState private var amountFocused: Bool
+    @FocusState private var noteFocused: Bool
+    private static let noteRowID = "note"
 
     init(request: TransactionEditorRequest) {
         let transaction = request.transaction
@@ -73,6 +75,7 @@ struct TransactionEditorView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
                 if existing == nil || existing?.kind != .adjustment {
                     Section {
@@ -146,6 +149,8 @@ struct TransactionEditorView: View {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                     TextField("Note (optional)", text: $note, axis: .vertical)
                         .lineLimit(1...3)
+                        .focused($noteFocused)
+                        .id(Self.noteRowID)
                 } footer: {
                     if date > Calendar.current.startOfDay(for: .now).addingTimeInterval(86_399) {
                         Text("Future-dated transactions are scheduled and affect balances on their date.")
@@ -176,6 +181,16 @@ struct TransactionEditorView: View {
                         Button("Delete Transaction", role: .destructive) { showDeleteConfirmation = true }
                     }
                 }
+            }
+            // The Note row sits low in the form; on its own the form can leave it behind the
+            // keyboard and the validation bar, so bring it into view once the keyboard is up.
+            .onChange(of: noteFocused) { _, focused in
+                guard focused else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    withAnimation { proxy.scrollTo(Self.noteRowID, anchor: .center) }
+                }
+            }
             }
             .navigationTitle(existing == nil ? "New \(kind.title)" : "Edit \(kind.title)")
             .navigationBarTitleDisplayMode(.inline)
