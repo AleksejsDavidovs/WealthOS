@@ -184,11 +184,9 @@ struct TransactionEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }.disabled(validationMessage != nil)
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { amountFocused = false }
-                }
             }
+            // The decimal pad has no return key; dragging the form dismisses any keyboard.
+            .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .bottom) {
                 if let message = validationMessage, !amountText.isEmpty {
                     Text(message).font(.footnote).foregroundStyle(.secondary)
