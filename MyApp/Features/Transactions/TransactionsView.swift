@@ -60,6 +60,7 @@ struct TransactionsView: View {
     @State private var showFilters = false
     @State private var editorRequest: TransactionEditorRequest?
     @State private var pendingDeletion: TransactionRecord?
+    @State private var saveError: String?
     @State private var showAccountEditor = false
 
     private func transactionList(engine: FinanceEngine) -> some View {
@@ -157,15 +158,19 @@ struct TransactionsView: View {
                 get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }), titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     if let pendingDeletion {
-                        context.delete(pendingDeletion)
-                        try? context.save()
-                        DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                        do {
+                            try Persistence.commit(context) { context.delete(pendingDeletion) }
+                            DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     pendingDeletion = nil
                 }
             } message: {
                 Text("Balances will be recalculated. This can't be undone.")
             }
+            .saveErrorAlert($saveError)
         }
     }
 

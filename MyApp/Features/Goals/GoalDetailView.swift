@@ -9,6 +9,7 @@ struct GoalDetailView: View {
     @State private var showEditor = false
     @State private var showAdjust = false
     @State private var showDelete = false
+    @State private var saveError: String?
 
     var body: some View {
         let progress = GoalMath.progress(allocated: goal.allocatedAmount, target: goal.targetAmount)
@@ -78,11 +79,15 @@ struct GoalDetailView: View {
         .sheet(isPresented: $showAdjust) { GoalAllocationView(goal: goal) }
         .confirmationDialog("Delete “\(goal.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete Goal", role: .destructive) {
-                context.delete(goal)
-                try? context.save()
-                dismiss()
+                do {
+                    try Persistence.commit(context) { context.delete(goal) }
+                    dismiss()
+                } catch {
+                    saveError = error.localizedDescription
+                }
             }
         }
+        .saveErrorAlert($saveError)
     }
 }
 
@@ -94,6 +99,7 @@ struct GoalAllocationView: View {
     @State private var mode = 0
     @State private var text = ""
     @State private var saved = false
+    @State private var saveError: String?
 
     private var validation: AmountValidation { .money(text, allowZero: mode == 2) }
 
@@ -134,15 +140,20 @@ struct GoalAllocationView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let newAmount, newAmount >= 0 else { return }
-                        goal.allocatedAmount = newAmount
-                        try? context.save()
-                        saved = true
-                        dismiss()
+                        do {
+                            // Earmarks only reserve existing money; nothing here touches balances.
+                            try Persistence.commit(context) { goal.allocatedAmount = newAmount }
+                            saved = true
+                            dismiss()
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     .disabled((newAmount ?? -1) < 0)
                 }
             }
             .sensoryFeedback(.success, trigger: saved)
+            .saveErrorAlert($saveError)
         }
         .presentationDetents([.medium])
     }
@@ -163,6 +174,7 @@ struct GoalEditorView: View {
     @State private var monthlyText: String
     @State private var colorName: String
     @State private var notes: String
+    @State private var saveError: String?
 
     init(goal: Goal?) {
         self.goal = goal
@@ -219,26 +231,32 @@ struct GoalEditorView: View {
                 if goal == nil { colorName = newType.defaultColor }
             }
             .onAppear { if goal == nil && name.isEmpty { name = type.title } }
+            .saveErrorAlert($saveError)
         }
     }
 
     private func save() {
         guard let target = target.value, let allocated = allocated.value, let monthly = monthly.value else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let goal {
-            goal.name = trimmed
-            goal.type = type
-            goal.targetAmount = target
-            goal.targetDate = hasTargetDate ? targetDate : nil
-            goal.allocatedAmount = allocated
-            goal.monthlyContribution = monthly
-            goal.colorName = colorName
-            goal.notes = notes
-        } else {
-            context.insert(Goal(name: trimmed, type: type, targetAmount: target, targetDate: hasTargetDate ? targetDate : nil,
-                                allocatedAmount: allocated, monthlyContribution: monthly, colorName: colorName, notes: notes))
+        do {
+            try Persistence.commit(context) {
+                if let goal {
+                    goal.name = trimmed
+                    goal.type = type
+                    goal.targetAmount = target
+                    goal.targetDate = hasTargetDate ? targetDate : nil
+                    goal.allocatedAmount = allocated
+                    goal.monthlyContribution = monthly
+                    goal.colorName = colorName
+                    goal.notes = notes
+                } else {
+                    context.insert(Goal(name: trimmed, type: type, targetAmount: target, targetDate: hasTargetDate ? targetDate : nil,
+                                        allocatedAmount: allocated, monthlyContribution: monthly, colorName: colorName, notes: notes))
+                }
+            }
+            dismiss()
+        } catch {
+            saveError = error.localizedDescription
         }
-        try? context.save()
-        dismiss()
     }
 }

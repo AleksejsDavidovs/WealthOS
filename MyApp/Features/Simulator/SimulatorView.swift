@@ -12,6 +12,8 @@ struct SimulatorView: View {
     @State private var showEditor = false
     @State private var showMethodology = false
     @State private var showSyncConfirmation = false
+    /// "Keep mine" for these exact live figures; any further change to the data shows the card again.
+    @State private var dismissedLiveBalances: SimulatorViewModel.StartingBalances?
 
     enum ChartMode: String, CaseIterable, Identifiable {
         case netWorth = "Net Worth", composition = "Composition", compare = "Compare"
@@ -27,6 +29,11 @@ struct SimulatorView: View {
                         InfoBanner(text: "Estimates based on your assumptions — not a prediction or guarantee. Investment returns vary and can be negative.",
                                    symbol: "exclamationmark.bubble.fill", tint: .orange)
                         scenarioPicker
+                        if model.isLoaded,
+                           let live = SimulatorViewModel.liveBalancesIfChanged(engine.summary, parameters: model.parameters),
+                           live != dismissedLiveBalances {
+                            liveDataCard(live)
+                        }
                         headline
                         chartCard
                         controlsCard
@@ -71,6 +78,23 @@ struct SimulatorView: View {
     }
 
     // MARK: Sections
+
+    private func liveDataCard(_ live: SimulatorViewModel.StartingBalances) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Your balances changed", systemImage: "arrow.triangle.2.circlepath")
+                .font(.subheadline.weight(.semibold))
+            Text("This scenario starts from \(MoneyFormat.string(model.parameters.startingCash, code: baseCurrency, fractionDigits: 0)) cash and \(MoneyFormat.string(model.parameters.startingInvestments, code: baseCurrency, fractionDigits: 0)) investments. Your accounts now show \(MoneyFormat.string(live.cash, code: baseCurrency, fractionDigits: 0)) and \(MoneyFormat.string(live.investments, code: baseCurrency, fractionDigits: 0)).")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Use Current Balances") { model.applyLiveStartingBalances(live) }
+                    .buttonStyle(.borderedProminent).tint(Theme.accentFill)
+                Button("Keep Scenario Values") { dismissedLiveBalances = live }
+                    .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+        }
+        .card(padding: 14)
+    }
 
     private var scenarioPicker: some View {
         Picker("Scenario", selection: $model.selectedKind) {

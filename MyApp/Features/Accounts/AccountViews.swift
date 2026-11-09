@@ -71,6 +71,7 @@ struct AccountDetailView: View {
     @State private var showBalanceUpdate = false
     @State private var showDelete = false
     @State private var editorRequest: TransactionEditorRequest?
+    @State private var saveError: String?
 
     var body: some View {
         FinanceReader { engine in
@@ -126,8 +127,11 @@ struct AccountDetailView: View {
                 Section {
                     Button(account.isArchived ? "Unarchive Account" : "Archive Account",
                            systemImage: account.isArchived ? "tray.and.arrow.up" : "archivebox") {
-                        account.isArchived.toggle()
-                        try? context.save()
+                        do {
+                            try Persistence.commit(context) { account.isArchived.toggle() }
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
                     }
                     Button("Delete Account", systemImage: "trash", role: .destructive) { showDelete = true }
                 } footer: {
@@ -145,11 +149,16 @@ struct AccountDetailView: View {
         }
         .sheet(isPresented: $showEditor) { AccountEditorView(account: account) }
         .sheet(item: $editorRequest) { TransactionEditorView(request: $0) }
+        .saveErrorAlert($saveError)
         .confirmationDialog("Delete “\(account.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete Account and Its Transactions", role: .destructive) {
-                try? LedgerService.delete(account: account, in: context)
-                DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
-                dismiss()
+                do {
+                    try Persistence.commit(context) { try LedgerService.delete(account: account, in: context) }
+                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                    dismiss()
+                } catch {
+                    saveError = error.localizedDescription
+                }
             }
         } message: {
             let usage = LedgerService.usage(of: account, in: context)
@@ -231,6 +240,7 @@ struct AccountEditorView: View {
     @State private var institution: String
     @State private var notes: String
     @State private var colorName: String
+    @State private var saveError: String?
 
     init(account: Account?, presetKind: AccountKind = .checking) {
         self.account = account
@@ -294,6 +304,7 @@ struct AccountEditorView: View {
                     Button("Save", action: save).disabled(trimmedName.isEmpty || duplicateName || validation.value == nil)
                 }
             }
+            .saveErrorAlert($saveError)
         }
     }
 
@@ -305,22 +316,28 @@ struct AccountEditorView: View {
     private func save() {
         guard let value = validation.value else { return }
         let opening = kind.isLiability ? -abs(value) : value
-        if let account {
-            account.name = trimmedName
-            account.kind = kind
-            account.currencyCode = currencyCode
-            account.openingBalance = opening
-            account.openingDate = openingDate
-            account.institution = institution
-            account.notes = notes
-            account.colorName = colorName
-        } else {
-            let order = (allAccounts.map(\.sortOrder).max() ?? -1) + 1
-            context.insert(Account(name: trimmedName, kind: kind, currencyCode: currencyCode, openingBalance: opening,
-                                   openingDate: openingDate, institution: institution, notes: notes, colorName: colorName,
-                                   sortOrder: order))
+        do {
+            try Persistence.commit(context) {
+                if let account {
+                    account.name = trimmedName
+                    account.kind = kind
+                    account.currencyCode = currencyCode
+                    account.openingBalance = opening
+                    account.openingDate = openingDate
+                    account.institution = institution
+                    account.notes = notes
+                    account.colorName = colorName
+                } else {
+                    let order = (allAccounts.map(\.sortOrder).max() ?? -1) + 1
+                    context.insert(Account(name: trimmedName, kind: kind, currencyCode: currencyCode, openingBalance: opening,
+                                           openingDate: openingDate, institution: institution, notes: notes, colorName: colorName,
+                                           sortOrder: order))
+                }
+            }
+        } catch {
+            saveError = error.localizedDescription
+            return
         }
-        try? context.save()
         DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
         dismiss()
     }

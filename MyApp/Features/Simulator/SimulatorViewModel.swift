@@ -59,13 +59,38 @@ final class SimulatorViewModel {
         loadSelected()
     }
 
+    struct StartingBalances: Equatable {
+        var cash: Decimal
+        var investments: Decimal
+    }
+
+    /// Live starting balances as the Simulator defines them: everything except investments
+    /// (net of debts) as "cash", plus investments.
+    static func liveStartingBalances(_ summary: NetWorthSummary) -> StartingBalances {
+        StartingBalances(cash: Money.round(summary.netWorth - summary.investments), investments: Money.round(summary.investments))
+    }
+
+    /// Scenario starting balances are user-editable assumptions, so they're never replaced
+    /// silently. This reports when they no longer match the live data so the UI can offer it.
+    static func liveBalancesIfChanged(_ summary: NetWorthSummary, parameters: SimulationParameters) -> StartingBalances? {
+        let live = liveStartingBalances(summary)
+        return live.cash == parameters.startingCash && live.investments == parameters.startingInvestments ? nil : live
+    }
+
+    func applyLiveStartingBalances(_ live: StartingBalances) {
+        update {
+            $0.startingCash = live.cash
+            $0.startingInvestments = live.investments
+        }
+    }
+
     static func currentFigures(engine: FinanceEngine) -> (cash: Decimal, investments: Decimal, income: Decimal, expenses: Decimal) {
-        let summary = engine.summary
+        let balances = liveStartingBalances(engine.summary)
         let flow = engine.averageMonthlyFlow()
         let defaults = UserDefaults.standard
         let income = flow?.income ?? DecimalParser.parse(defaults.string(forKey: SettingsKey.estimatedIncome) ?? "")?.value ?? 0
         let expenses = flow?.expenses ?? DecimalParser.parse(defaults.string(forKey: SettingsKey.estimatedExpenses) ?? "")?.value ?? 0
-        return (Money.round(summary.netWorth - summary.investments), Money.round(summary.investments), income, expenses)
+        return (balances.cash, balances.investments, income, expenses)
     }
 
     /// Replaces starting balances and cash flow with the latest actual figures.

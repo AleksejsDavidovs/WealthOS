@@ -67,6 +67,8 @@ struct FinanceEngine {
     let summary: NetWorthSummary
     /// End of the current day; later-dated records are scheduled, not yet actual.
     let asOfDate: Date
+    /// Future-dated transactions and trades, excluded from balances until their date.
+    let scheduledCount: Int
 
     /// - Parameter now: Transactions dated after the end of this day are "scheduled" and
     ///   do not affect current balances until their date arrives.
@@ -81,6 +83,8 @@ struct FinanceEngine {
         self.accountsByID = byID
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))?.addingTimeInterval(-1) ?? now
         self.asOfDate = endOfToday
+        self.scheduledCount = transactions.lazy.filter { $0.date > endOfToday }.count
+            + trades.lazy.filter { $0.date > endOfToday }.count
         let balances = Self.computeBalances(accounts: accounts, transactions: transactions, trades: trades, asOf: endOfToday)
         self.balances = balances
         let positions = Self.computePositions(holdings: holdings, trades: trades, converter: converter)

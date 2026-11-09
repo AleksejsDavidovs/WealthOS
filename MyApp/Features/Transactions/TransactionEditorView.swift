@@ -25,6 +25,7 @@ struct TransactionEditorView: View {
     @State private var showDeleteConfirmation = false
     @State private var showAccountEditor = false
     @State private var saveCount = 0
+    @State private var saveError: String?
     @FocusState private var amountFocused: Bool
 
     init(request: TransactionEditorRequest) {
@@ -205,6 +206,7 @@ struct TransactionEditorView: View {
             .onChange(of: destinationAccountID) { _, _ in suggestDestinationAmount() }
             .onChange(of: amountText) { _, _ in suggestDestinationAmount() }
             .sensoryFeedback(.success, trigger: saveCount)
+            .saveErrorAlert($saveError)
         }
     }
 
@@ -237,33 +239,41 @@ struct TransactionEditorView: View {
         let destinationID = kind == .transfer ? destinationAccountID : nil
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let existing {
-            existing.kind = kind
-            existing.amount = amount
-            existing.accountID = accountID
-            existing.destinationAccountID = destinationID
-            existing.destinationAmount = destinationAmount
-            existing.categoryID = category
-            existing.date = date
-            existing.note = trimmedNote
-        } else if isRecurring {
-            let isDue = date <= Calendar.current.startOfDay(for: .now).addingTimeInterval(86_399)
-            let rule = RecurringRule(kind: kind, amount: amount, destinationAmount: destinationAmount, accountID: accountID,
-                                     destinationAccountID: destinationID, categoryID: category, note: trimmedNote,
-                                     frequency: frequency, startDate: date, endDate: hasEndDate ? endDate : nil,
-                                     generatedCount: isDue ? 1 : 0)
-            context.insert(rule)
-            if isDue {
-                context.insert(TransactionRecord(kind: kind, amount: amount, destinationAmount: destinationAmount, date: date,
-                                                 note: trimmedNote, accountID: accountID, destinationAccountID: destinationID,
-                                                 categoryID: category, recurringRuleID: rule.id))
+        do {
+            // Balances are derived from records, so an edit replaces the old effect rather than
+            // stacking on it. If saving fails, the edit is rolled back and no balance changes.
+            try Persistence.commit(context) {
+                if let existing {
+                    existing.kind = kind
+                    existing.amount = amount
+                    existing.accountID = accountID
+                    existing.destinationAccountID = destinationID
+                    existing.destinationAmount = destinationAmount
+                    existing.categoryID = category
+                    existing.date = date
+                    existing.note = trimmedNote
+                } else if isRecurring {
+                    let isDue = date <= Calendar.current.startOfDay(for: .now).addingTimeInterval(86_399)
+                    let rule = RecurringRule(kind: kind, amount: amount, destinationAmount: destinationAmount, accountID: accountID,
+                                             destinationAccountID: destinationID, categoryID: category, note: trimmedNote,
+                                             frequency: frequency, startDate: date, endDate: hasEndDate ? endDate : nil,
+                                             generatedCount: isDue ? 1 : 0)
+                    context.insert(rule)
+                    if isDue {
+                        context.insert(TransactionRecord(kind: kind, amount: amount, destinationAmount: destinationAmount, date: date,
+                                                         note: trimmedNote, accountID: accountID, destinationAccountID: destinationID,
+                                                         categoryID: category, recurringRuleID: rule.id))
+                    }
+                } else {
+                    context.insert(TransactionRecord(kind: kind, amount: amount, destinationAmount: destinationAmount, date: date,
+                                                     note: trimmedNote, accountID: accountID, destinationAccountID: destinationID,
+                                                     categoryID: category))
+                }
             }
-        } else {
-            context.insert(TransactionRecord(kind: kind, amount: amount, destinationAmount: destinationAmount, date: date,
-                                             note: trimmedNote, accountID: accountID, destinationAccountID: destinationID,
-                                             categoryID: category))
+        } catch {
+            saveError = error.localizedDescription
+            return
         }
-        try? context.save()
         if isRecurring { RecurringService.processDueRules(in: context) }
         DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
         saveCount += 1
@@ -272,8 +282,12 @@ struct TransactionEditorView: View {
 
     private func deleteTransaction() {
         guard let existing else { return }
-        context.delete(existing)
-        try? context.save()
+        do {
+            try Persistence.commit(context) { context.delete(existing) }
+        } catch {
+            saveError = error.localizedDescription
+            return
+        }
         DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
         dismiss()
     }

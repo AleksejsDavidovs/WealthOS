@@ -41,4 +41,20 @@ nonisolated enum GoalMath {
     static func allocatableAssets(_ summary: NetWorthSummary) -> Decimal {
         max(0, summary.liquid + summary.investments)
     }
+
+    /// The Goals overview card, derived in one place from the live engine summary and goals.
+    struct Overview: Equatable {
+        var allocated: Decimal
+        var target: Decimal
+        /// Cash + investments that can back earmarks.
+        var available: Decimal
+        var unallocated: Decimal { available - allocated }
+        var isOverAllocated: Bool { unallocated < 0 }
+    }
+
+    static func overview(summary: NetWorthSummary, goals: [(allocated: Decimal, target: Decimal)]) -> Overview {
+        Overview(allocated: goals.reduce(0) { $0 + $1.allocated },
+                 target: goals.reduce(0) { $0 + $1.target },
+                 available: allocatableAssets(summary))
+    }
 }

@@ -13,7 +13,7 @@ struct GoalsView: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
-                        earmarkCard(engine.summary)
+                        earmarkCard(engine)
                         NavigationLink { PurchaseImpactView() } label: { whatIfCard }
                             .buttonStyle(.plain)
                         if goals.isEmpty {
@@ -47,11 +47,13 @@ struct GoalsView: View {
         }
     }
 
-    private func earmarkCard(_ summary: NetWorthSummary) -> some View {
-        let allocated = goals.reduce(Decimal(0)) { $0 + $1.allocatedAmount }
-        let target = goals.reduce(Decimal(0)) { $0 + $1.targetAmount }
-        let available = GoalMath.allocatableAssets(summary)
-        let unallocated = available - allocated
+    private func earmarkCard(_ engine: FinanceEngine) -> some View {
+        let summary = engine.summary
+        let overview = GoalMath.overview(summary: summary, goals: goals.map { ($0.allocatedAmount, $0.targetAmount) })
+        let allocated = overview.allocated
+        let target = overview.target
+        let available = overview.available
+        let unallocated = overview.unallocated
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -78,12 +80,23 @@ struct GoalsView: View {
                         .foregroundStyle(unallocated < 0 ? Theme.negative : .primary)
                 }
             }
-            if unallocated < 0 {
+            if overview.isOverAllocated {
                 Label("Goals earmark more than your cash and investments. Reduce allocations to keep them realistic.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(Theme.warning)
             }
-            Text("Earmarks are portions of money you already have — they are not added to your net worth.")
+            // These exclusions are why the figure can legitimately stay put after a save.
+            if !summary.missingRateCurrencies.isEmpty {
+                Label("Not included: balances in \(summary.missingRateCurrencies.sorted().formatted(.list(type: .and))) — add an exchange rate in Settings.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(Theme.warning)
+            }
+            if engine.scheduledCount > 0 {
+                Label("\(engine.scheduledCount) future-dated \(engine.scheduledCount == 1 ? "entry counts" : "entries count") from \(engine.scheduledCount == 1 ? "its" : "their") date.",
+                      systemImage: "calendar.badge.clock")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Counts cash, bank, savings and investments — not property, other assets or debts. Earmarks are portions of money you already have and are not added to your net worth.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .card()

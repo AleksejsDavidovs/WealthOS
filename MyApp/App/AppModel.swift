@@ -109,7 +109,10 @@ extension CurrencyConverter {
     }
 }
 
-/// Supplies a `FinanceEngine` built from live SwiftData queries.
+/// The single source of financial truth for every screen: a `FinanceEngine` rebuilt from
+/// live SwiftData queries on the main context. Any saved (or pending) insert, edit or delete
+/// of an account, transaction, holding, trade or rate — including bulk restore/import into
+/// that context — re-renders every visible reader. No totals are cached anywhere else.
 struct FinanceReader<Content: View>: View {
     @Query private var accounts: [Account]
     @Query private var transactions: [TransactionRecord]
@@ -117,6 +120,9 @@ struct FinanceReader<Content: View>: View {
     @Query private var trades: [InvestmentTrade]
     @Query private var rates: [CurrencyRate]
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
+    /// Balances depend on "today" (future-dated records count from their date), which no
+    /// query observes; bumping this at midnight or after a date change re-evaluates the body.
+    @State private var day = Calendar.current.startOfDay(for: .now)
     private let content: (FinanceEngine) -> Content
 
     init(@ViewBuilder content: @escaping (FinanceEngine) -> Content) {
@@ -124,7 +130,13 @@ struct FinanceReader<Content: View>: View {
     }
 
     var body: some View {
+        let _ = day
         content(FinanceEngine(accounts: accounts, transactions: transactions, holdings: holdings, trades: trades,
                               converter: .make(base: baseCurrency, rates: rates)))
+            .task {
+                for await _ in NotificationCenter.default.notifications(named: UIApplication.significantTimeChangeNotification) {
+                    day = Calendar.current.startOfDay(for: .now)
+                }
+            }
     }
 }
