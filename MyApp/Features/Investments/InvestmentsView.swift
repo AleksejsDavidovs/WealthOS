@@ -12,6 +12,7 @@ struct InvestmentsView: View {
     @Query private var quotes: [MarketQuote]
     @Environment(MarketDataService.self) private var market
     @Environment(Trading212Service.self) private var trading212
+    @Environment(BinanceService.self) private var binance
     @Environment(\.modelContext) private var context
 
     var body: some View {
@@ -22,7 +23,7 @@ struct InvestmentsView: View {
                         if app.isDemoMode { DemoBanner() }
                         MarketStatusCard()
                         portfolioHeader(engine)
-                        if !engine.hasAnyPositions && engine.broker.snapshot == nil {
+                        if !engine.hasAnyPositions && engine.broker.snapshot == nil && engine.binance.snapshot == nil {
                             EmptyStateCard(title: "Track your portfolio",
                                            message: "Find stocks, ETFs and crypto, record what you bought and follow cost basis, value and profit. No broker connection needed.",
                                            symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
@@ -30,6 +31,7 @@ struct InvestmentsView: View {
                             if engine.hasAnyPositions { allocationCard(engine) }
                             historyCard
                             Trading212PortfolioCard(engine: engine)
+                            BinancePortfolioCard(engine: engine)
                             if !engine.positions.isEmpty { holdingsList(engine) }
                         }
                     }
@@ -38,9 +40,20 @@ struct InvestmentsView: View {
                 }
                 .screenBackground()
                 .refreshable {
-                    if !app.isDemoMode, trading212.isConnected { await trading212.sync(context: context, force: true) }
+                    if !app.isDemoMode {
+                        async let broker: Void = refreshTrading212()
+                        async let crypto: Void = refreshBinance()
+                        _ = await (broker, crypto)
+                    }
                     if market.isEnabled { await market.refresh(context: context, baseCurrency: baseCurrency, force: true) }
                 }
+            }
+            .task {
+                // Stale-only (15 min); the services skip fresh data, back off after failures and
+                // never run twice at once. Never against demo data.
+                guard !app.isDemoMode else { return }
+                if trading212.isConnected { await trading212.syncIfStale(context: context) }
+                if binance.isConnected { await binance.syncIfStale(context: context) }
             }
             .navigationTitle("Investments")
             .toolbar {
@@ -58,10 +71,19 @@ struct InvestmentsView: View {
         }
     }
 
+    private func refreshTrading212() async {
+        if trading212.isConnected { await trading212.sync(context: context, force: true) }
+    }
+
+    private func refreshBinance() async {
+        if binance.isConnected { await binance.sync(context: context, force: true) }
+    }
+
     private func portfolioHeader(_ engine: FinanceEngine) -> some View {
         let value = engine.portfolioMarketValue
         let cost = engine.portfolioCostBasis
-        let unrealized = value - cost
+        // Only positions with a known cost basis: synced crypto without one must not look like profit.
+        let unrealized = engine.portfolioUnrealized
         let fraction: Decimal? = cost > 0 ? unrealized / cost : nil
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
@@ -83,6 +105,10 @@ struct InvestmentsView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .foregroundStyle(Theme.signColor(unrealized))
+                if engine.positionsWithoutCost > 0 {
+                    Text("Excludes \(engine.positionsWithoutCost) position\(engine.positionsWithoutCost == 1 ? "" : "s") without a known cost basis.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Divider()
             MetricRow(metrics: [
@@ -199,7 +225,7 @@ struct InvestmentsView: View {
                         HoldingRow(position: position, baseCurrency: baseCurrency,
                                    status: PriceStatus.describe(holding: position.holding,
                                                                 quote: market.quote(for: position.holding, in: quoteIndex)),
-                                   countedViaBroker: engine.isSuperseded(position.holding))
+                                   countedVia: engine.countedVia(position.holding))
                             .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
@@ -215,8 +241,8 @@ struct HoldingRow: View {
     let position: PositionSummary
     let baseCurrency: String
     let status: PriceStatus
-    /// Excluded from totals because the user marked it as already counted via Trading 212.
-    var countedViaBroker = false
+    /// The external source (Trading 212 / Binance) the user said already counts this holding.
+    var countedVia: String?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -227,8 +253,8 @@ struct HoldingRow: View {
                     .lineLimit(1)
                 Text("\(MoneyFormat.quantity(position.position.quantity)) × \(MoneyFormat.string(position.holding.currentPrice, code: position.holding.currencyCode))")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                if countedViaBroker {
-                    Label("Counted via Trading 212 · not in totals", systemImage: "link")
+                if let countedVia {
+                    Label("Counted via \(countedVia) · not in totals", systemImage: "link")
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                 } else {
                     PriceStatusBadge(status: status)

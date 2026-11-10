@@ -99,16 +99,16 @@ struct TransactionRow: View {
 struct AccountRow: View {
     let account: Account
     let balance: Decimal
-    /// Excluded from totals because the user marked it as already counted via Trading 212.
-    var countedViaBroker = false
+    /// The external source (Trading 212 / Binance) the user said already counts this account.
+    var countedVia: String?
 
     var body: some View {
         HStack(spacing: 12) {
             IconBadge(symbol: account.kind.symbol, color: Theme.color(named: account.colorName))
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.name).font(.body.weight(.medium)).lineLimit(1)
-                Text(countedViaBroker ? "Counted via Trading 212 · not in totals"
-                     : [account.kind.title, account.institution.isEmpty ? nil : account.institution].compactMap { $0 }.joined(separator: " · "))
+                Text(countedVia.map { "Counted via \($0) · not in totals" }
+                     ?? [account.kind.title, account.institution.isEmpty ? nil : account.institution].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()

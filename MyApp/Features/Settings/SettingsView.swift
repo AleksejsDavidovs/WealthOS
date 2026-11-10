@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
     @Environment(MarketDataService.self) private var market
     @Environment(Trading212Service.self) private var trading212
+    @Environment(BinanceService.self) private var binance
 
     @Query private var transactions: [TransactionRecord]
     @Query private var accounts: [Account]
@@ -84,10 +85,17 @@ struct SettingsView: View {
                             Label("Trading 212", systemImage: "building.columns")
                         }
                     }
+                    NavigationLink { BinanceSettingsView() } label: {
+                        LabeledContent {
+                            Text(binance.isConnected ? (binance.needsReconnect ? "Reconnect" : "Connected") : "Off")
+                        } label: {
+                            Label("Binance", systemImage: "bitcoinsign.circle")
+                        }
+                    }
                 } header: {
                     Text("Integrations")
                 } footer: {
-                    Text("Read-only sync of your Trading 212 cash and positions. WealthOS can't place orders or move money.")
+                    Text("Read-only sync of your Trading 212 cash and positions and your Binance crypto. WealthOS can't place orders or move money.")
                 }
 
                 Section {
@@ -266,8 +274,10 @@ struct SettingsView: View {
         do {
             try LedgerService.deleteAllData(in: context)
             try Trading212Reconciler.removeAllData(in: context)
+            try BinanceReconciler.removeAllData(in: context)
             try context.save()
             try? trading212.disconnect(removeData: false, context: context)
+            try? binance.disconnect(removeData: false, context: context)
             market.deleteAllKeys()
             marketEnabled = false
             for key in [SettingsKey.estimatedIncome, SettingsKey.estimatedExpenses, SettingsKey.importedFileHashes,
@@ -390,7 +400,7 @@ struct PrivacyInfoView: View {
         List {
             Section {
                 row("iphone", "On-device only", "All data is stored in an encrypted, file-protected database on this iPhone. There is no account, server or cloud sync.")
-                row("network.slash", "Offline by default", "WealthOS makes no network requests unless you turn on Market Data or connect Trading 212. Market Data only downloads public prices over HTTPS from CoinGecko, Alpha Vantage and Frankfurter, sending nothing but ticker symbols and currency codes. Trading 212 sync reads your account directly from Trading 212 with read-only requests. API keys are stored in the iOS Keychain.")
+                row("network.slash", "Offline by default", "WealthOS makes no network requests unless you turn on Market Data or connect Trading 212 or Binance. Market Data only downloads public prices over HTTPS from CoinGecko, Alpha Vantage and Frankfurter, sending nothing but ticker symbols and currency codes. Trading 212 and Binance sync read your accounts directly from those services with read-only requests. API keys are stored in the iOS Keychain.")
                 row("eye.slash", "No tracking", "No analytics, telemetry, advertising or third-party SDKs. Logs never contain balances, names or transactions.")
                 row("faceid", "App lock", "Optional Face ID with passcode fallback and an optional 6-digit PIN as a backup. Content is hidden in the app switcher, and no open screen can be left visible behind the lock.")
                 row("lock.doc", "Encrypted backups", "Backups use AES-256-GCM with a key derived from your password (PBKDF2-SHA256, 600,000 iterations). If you forget the password, the backup cannot be recovered — not even by the developer.")

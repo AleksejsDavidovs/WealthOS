@@ -105,7 +105,7 @@ struct HomeView: View {
                     ForEach(visible) { account in
                         NavigationLink { AccountDetailView(account: account) } label: {
                             AccountRow(account: account, balance: engine.balance(of: account),
-                                       countedViaBroker: engine.isSuperseded(account))
+                                       countedVia: engine.countedVia(account))
                                 .padding(.vertical, 10)
                         }
                         .buttonStyle(.plain)

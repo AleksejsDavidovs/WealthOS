@@ -58,6 +58,39 @@ struct BrokerPortfolio {
     var supersededHoldingIDs: Set<UUID> { Set(links.filter { $0.kind == .holding }.map(\.localID)) }
 }
 
+/// Synced Binance balances plus the user's "Counted via Binance" links.
+struct BinancePortfolio {
+    var snapshot: BinanceAccountSnapshot?
+    var holdings: [BinanceHolding]
+    var links: [BinanceLink]
+
+    static let empty = BinancePortfolio(snapshot: nil, holdings: [], links: [])
+
+    var supersededAccountIDs: Set<UUID> { Set(links.filter { $0.kind == .account }.map(\.localID)) }
+    var supersededHoldingIDs: Set<UUID> { Set(links.filter { $0.kind == .holding }.map(\.localID)) }
+}
+
+/// One cryptocurrency across all Binance wallets (Spot + Flexible + Locked), counted once.
+struct BinanceAssetValue: Identifiable {
+    let asset: String
+    let rows: [BinanceHolding]
+    let quantity: Decimal
+    let spotQuantity: Decimal
+    let earnQuantity: Decimal
+    /// The most recently refreshed price among the rows; nil = no validated EUR price.
+    let priceEUR: Decimal?
+    let priceRoute: String
+    let pricedAt: Date?
+    let valueEUR: Decimal?
+    /// In the base currency; nil when unpriced or EUR can't be converted.
+    let valueBase: Decimal?
+    let spotBase: Decimal?
+    let earnBase: Decimal?
+
+    var id: String { asset }
+    var wallets: [BinanceWallet] { BinanceWallet.allCases.filter { wallet in rows.contains { $0.wallet == wallet } } }
+}
+
 struct BrokerPositionValue: Identifiable {
     let position: BrokerPosition
     /// Value/cost/P&L converted to the base currency; nil when not reported or not convertible.
@@ -81,6 +114,10 @@ struct BrokerPositionValue: Identifiable {
 ///   value as holdings — the provider's own account total is never added on top. Manual
 ///   accounts/holdings the user linked as "counted via Trading 212" are excluded from totals
 ///   (but kept and still listed), so the same money is never counted twice.
+/// - Binance: each asset's Spot + Earn quantity × Binance EUR price counts as holdings, once.
+///   Unpriced assets are listed but excluded from totals (never valued at zero). Cost basis is
+///   unknown, so Binance never contributes to cost basis or profit. Linked ("Counted via
+///   Binance") manual records are excluded like Trading 212 links.
 struct FinanceEngine {
     let accounts: [Account]
     let transactions: [TransactionRecord]
@@ -91,6 +128,8 @@ struct FinanceEngine {
     let brokerPositions: [BrokerPositionValue]
     /// Trading 212 cash in the base currency; nil without a snapshot or exchange rate.
     let brokerCashBase: Decimal?
+    let binance: BinancePortfolio
+    let binanceAssets: [BinanceAssetValue]
 
     let balances: [UUID: Decimal]
     let accountsByID: [UUID: Account]
@@ -105,13 +144,16 @@ struct FinanceEngine {
     ///   do not affect current balances until their date arrives.
     init(accounts: [Account], transactions: [TransactionRecord], holdings: [Holding],
          trades: [InvestmentTrade], converter: CurrencyConverter, broker: BrokerPortfolio = .empty,
-         now: Date = .now, calendar: Calendar = .current) {
+         binance: BinancePortfolio = .empty, now: Date = .now, calendar: Calendar = .current) {
         self.accounts = accounts
         self.transactions = transactions
         self.holdings = holdings
         self.trades = trades
         self.converter = converter
         self.broker = broker
+        self.binance = binance
+        let binanceAssets = Self.computeBinanceAssets(binance, converter: converter)
+        self.binanceAssets = binanceAssets
         let brokerPositions = Self.computeBrokerPositions(broker, converter: converter)
         self.brokerPositions = brokerPositions
         let brokerCashBase = broker.snapshot.flatMap { converter.toBase($0.cashTotal, from: $0.currencyCode) }
@@ -126,8 +168,8 @@ struct FinanceEngine {
         self.balances = balances
         let positions = Self.computePositions(holdings: holdings, trades: trades, converter: converter)
         self.positions = positions
-        let supersededAccounts = broker.supersededAccountIDs
-        let supersededHoldings = broker.supersededHoldingIDs
+        let supersededAccounts = broker.supersededAccountIDs.union(binance.supersededAccountIDs)
+        let supersededHoldings = broker.supersededHoldingIDs.union(binance.supersededHoldingIDs)
         var summary = Self.computeSummary(accounts: accounts.filter { !supersededAccounts.contains($0.id) },
                                           balances: balances,
                                           positions: positions.filter { !supersededHoldings.contains($0.holding.id) },
@@ -143,7 +185,51 @@ struct FinanceEngine {
             if let base = value.valueBase { summary.holdingsValue += base }
             if let currency = value.missingCurrency { summary.missingRateCurrencies.insert(currency) }
         }
+        for value in binanceAssets {
+            if let base = value.valueBase {
+                summary.holdingsValue += base
+            } else if value.valueEUR != nil {
+                summary.missingRateCurrencies.insert(BinancePricing.target)
+            }
+        }
         self.summary = summary
+    }
+
+    // MARK: Binance
+
+    static func computeBinanceAssets(_ binance: BinancePortfolio, converter: CurrencyConverter) -> [BinanceAssetValue] {
+        Dictionary(grouping: binance.holdings, by: \.asset).map { asset, rows in
+            let quantity = rows.reduce(Decimal(0)) { $0 + $1.amount }
+            let spot = rows.filter { $0.wallet == .spot }.reduce(Decimal(0)) { $0 + $1.amount }
+            let priced = rows.filter { $0.priceEUR != nil }.max { ($0.pricedAt ?? .distantPast) < ($1.pricedAt ?? .distantPast) }
+            let price = priced?.priceEUR
+            func base(_ amount: Decimal) -> Decimal? { price.flatMap { converter.toBase(amount * $0, from: BinancePricing.target) } }
+            return BinanceAssetValue(asset: asset, rows: rows, quantity: quantity, spotQuantity: spot, earnQuantity: quantity - spot,
+                                     priceEUR: price, priceRoute: priced?.priceRoute ?? "", pricedAt: priced?.pricedAt,
+                                     valueEUR: price.map { quantity * $0 }, valueBase: base(quantity),
+                                     spotBase: base(spot), earnBase: base(quantity - spot))
+        }
+        .sorted { ($0.valueBase ?? -1, $1.asset) > ($1.valueBase ?? -1, $0.asset) }
+    }
+
+    /// Priced Binance assets in the base currency. Unpriced assets are excluded, never zero.
+    var binanceTotalBase: Decimal { binanceAssets.compactMap(\.valueBase).reduce(0, +) }
+    var binanceSpotBase: Decimal { binanceAssets.compactMap(\.spotBase).reduce(0, +) }
+    var binanceEarnBase: Decimal { binanceAssets.compactMap(\.earnBase).reduce(0, +) }
+    /// Assets without a validated Binance EUR price (a missing EUR→base rate is reported separately).
+    var binanceUnpriced: [BinanceAssetValue] { binanceAssets.filter { $0.priceEUR == nil } }
+
+    /// Which external source the user said already counts this manual record, if any.
+    func countedVia(_ holding: Holding) -> String? {
+        if broker.supersededHoldingIDs.contains(holding.id) { return "Trading 212" }
+        if binance.supersededHoldingIDs.contains(holding.id) { return "Binance" }
+        return nil
+    }
+
+    func countedVia(_ account: Account) -> String? {
+        if broker.supersededAccountIDs.contains(account.id) { return "Trading 212" }
+        if binance.supersededAccountIDs.contains(account.id) { return "Binance" }
+        return nil
     }
 
     // MARK: Trading 212
@@ -175,8 +261,8 @@ struct FinanceEngine {
         }
     }
 
-    func isSuperseded(_ holding: Holding) -> Bool { broker.supersededHoldingIDs.contains(holding.id) }
-    func isSuperseded(_ account: Account) -> Bool { broker.supersededAccountIDs.contains(account.id) }
+    func isSuperseded(_ holding: Holding) -> Bool { countedVia(holding) != nil }
+    func isSuperseded(_ account: Account) -> Bool { countedVia(account) != nil }
 
     /// Trading 212 cash + positions, in base currency. Never the provider's reported total.
     var brokerTotalBase: Decimal { (brokerCashBase ?? 0) + brokerPositions.compactMap(\.valueBase).reduce(0, +) }
@@ -259,8 +345,9 @@ struct FinanceEngine {
     }
     var portfolioMarketValue: Decimal {
         countedPositions.compactMap(\.marketValueBase).reduce(0, +) + brokerPositions.compactMap(\.valueBase).reduce(0, +)
+            + binanceTotalBase
     }
-    /// Unrealized P/L over positions where it can be determined.
+    /// Unrealized P/L over positions where it can be determined (never Binance: no cost basis).
     var portfolioUnrealized: Decimal {
         countedPositions.compactMap(\.unrealizedProfitBase).reduce(0, +) + brokerPositions.compactMap(\.unrealizedBase).reduce(0, +)
     }
@@ -270,11 +357,12 @@ struct FinanceEngine {
         } ?? 0
         return countedPositions.compactMap(\.realizedBase).reduce(0, +) + brokerRealized
     }
-    /// Positions whose cost basis (and so P/L) isn't available.
+    /// Positions whose cost basis (and so P/L) isn't available. Binance balances never carry one.
     var positionsWithoutCost: Int {
         countedPositions.filter { $0.costBasisBase == nil }.count + brokerPositions.filter { $0.costBase == nil }.count
+            + binanceAssets.count
     }
-    var hasAnyPositions: Bool { !positions.isEmpty || !brokerPositions.isEmpty }
+    var hasAnyPositions: Bool { !positions.isEmpty || !brokerPositions.isEmpty || !binanceAssets.isEmpty }
 
     /// Market value by asset class in base currency (holdings only, manual + Trading 212).
     var allocation: [(assetClass: AssetClass, value: Decimal)] {
@@ -286,6 +374,10 @@ struct FinanceEngine {
         for position in brokerPositions {
             guard let value = position.valueBase, value > 0 else { continue }
             totals[position.position.assetClass, default: 0] += value
+        }
+        for asset in binanceAssets {
+            guard let value = asset.valueBase, value > 0 else { continue }
+            totals[.crypto, default: 0] += value
         }
         return AssetClass.allCases.compactMap { cls in totals[cls].map { (cls, $0) } }
     }

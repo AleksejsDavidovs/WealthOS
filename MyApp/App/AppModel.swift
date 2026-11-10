@@ -83,11 +83,15 @@ enum DataMaintenance {
         let broker = BrokerPortfolio(snapshot: (try? context.fetch(FetchDescriptor<BrokerAccountSnapshot>()))?.first,
                                      positions: (try? context.fetch(FetchDescriptor<BrokerPosition>())) ?? [],
                                      links: (try? context.fetch(FetchDescriptor<BrokerLink>())) ?? [])
+        let binance = BinancePortfolio(snapshot: (try? context.fetch(FetchDescriptor<BinanceAccountSnapshot>()))?.first,
+                                       holdings: (try? context.fetch(FetchDescriptor<BinanceHolding>())) ?? [],
+                                       links: (try? context.fetch(FetchDescriptor<BinanceLink>())) ?? [])
         return FinanceEngine(accounts: (try? context.fetch(FetchDescriptor<Account>())) ?? [],
                              transactions: (try? context.fetch(FetchDescriptor<TransactionRecord>())) ?? [],
                              holdings: (try? context.fetch(FetchDescriptor<Holding>())) ?? [],
                              trades: (try? context.fetch(FetchDescriptor<InvestmentTrade>())) ?? [],
-                             converter: CurrencyConverter.make(base: baseCurrency, rates: rates), broker: broker)
+                             converter: CurrencyConverter.make(base: baseCurrency, rates: rates), broker: broker,
+                             binance: binance)
     }
 
     /// Launch / foreground housekeeping: default categories, due recurring transactions,
@@ -102,7 +106,7 @@ enum DataMaintenance {
         let engine = makeEngine(context: context, baseCurrency: baseCurrency)
         SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
                                                 hasData: !engine.accounts.isEmpty || !engine.holdings.isEmpty
-                                                    || engine.broker.snapshot != nil,
+                                                    || engine.broker.snapshot != nil || engine.binance.snapshot != nil,
                                                 in: context)
     }
 }
@@ -126,6 +130,9 @@ struct FinanceReader<Content: View>: View {
     @Query private var brokerSnapshots: [BrokerAccountSnapshot]
     @Query private var brokerPositions: [BrokerPosition]
     @Query private var brokerLinks: [BrokerLink]
+    @Query private var binanceSnapshots: [BinanceAccountSnapshot]
+    @Query private var binanceHoldings: [BinanceHolding]
+    @Query private var binanceLinks: [BinanceLink]
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     /// Balances depend on "today" (future-dated records count from their date), which no
     /// query observes; bumping this at midnight or after a date change re-evaluates the body.
@@ -141,7 +148,9 @@ struct FinanceReader<Content: View>: View {
         content(FinanceEngine(accounts: accounts, transactions: transactions, holdings: holdings, trades: trades,
                               converter: .make(base: baseCurrency, rates: rates),
                               broker: BrokerPortfolio(snapshot: brokerSnapshots.first, positions: brokerPositions,
-                                                      links: brokerLinks)))
+                                                      links: brokerLinks),
+                              binance: BinancePortfolio(snapshot: binanceSnapshots.first, holdings: binanceHoldings,
+                                                        links: binanceLinks)))
             .task {
                 for await _ in NotificationCenter.default.notifications(named: UIApplication.significantTimeChangeNotification) {
                     day = Calendar.current.startOfDay(for: .now)
