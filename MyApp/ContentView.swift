@@ -107,18 +107,29 @@ struct MainTabView: View {
         .sheet(item: $app.quickAddRequest) { TransactionEditorView(request: $0) }
         .task {
             DataMaintenance.run(context: context, baseCurrency: baseCurrency)
+            autoSyncTrading212()
             await autoRefreshMarketData()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 DataMaintenance.run(context: context, baseCurrency: baseCurrency)
                 Task { await autoRefreshMarketData() }
+                autoSyncTrading212()
             }
         }
     }
 
     @Environment(MarketDataService.self) private var marketData
+    @Environment(Trading212Service.self) private var trading212
     @AppStorage(SettingsKey.marketAutoRefresh) private var marketAutoRefresh = true
+
+    /// Only when the cached snapshot is stale (15 min) and never against demo data. The
+    /// service itself refuses overlapping runs and backs off after failures, so rapid
+    /// foreground/background switches cause at most one request set.
+    private func autoSyncTrading212() {
+        guard !app.isDemoMode, trading212.isConnected, let real = app.persistentContainer?.mainContext else { return }
+        Task { await trading212.syncIfStale(context: real) }
+    }
 
     /// Respects each provider's cache TTL, so frequent app switches don't cause requests.
     private func autoRefreshMarketData() async {

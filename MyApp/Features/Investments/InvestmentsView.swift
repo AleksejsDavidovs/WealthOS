@@ -11,6 +11,7 @@ struct InvestmentsView: View {
     @State private var selectedAngle: Double?
     @Query private var quotes: [MarketQuote]
     @Environment(MarketDataService.self) private var market
+    @Environment(Trading212Service.self) private var trading212
     @Environment(\.modelContext) private var context
 
     var body: some View {
@@ -21,14 +22,15 @@ struct InvestmentsView: View {
                         if app.isDemoMode { DemoBanner() }
                         MarketStatusCard()
                         portfolioHeader(engine)
-                        if engine.positions.isEmpty {
+                        if !engine.hasAnyPositions && engine.broker.snapshot == nil {
                             EmptyStateCard(title: "Track your portfolio",
                                            message: "Find stocks, ETFs and crypto, record what you bought and follow cost basis, value and profit. No broker connection needed.",
                                            symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
                         } else {
-                            allocationCard(engine)
+                            if engine.hasAnyPositions { allocationCard(engine) }
                             historyCard
-                            holdingsList(engine)
+                            Trading212PortfolioCard(engine: engine)
+                            if !engine.positions.isEmpty { holdingsList(engine) }
                         }
                     }
                     .padding(.horizontal)
@@ -36,6 +38,7 @@ struct InvestmentsView: View {
                 }
                 .screenBackground()
                 .refreshable {
+                    if !app.isDemoMode, trading212.isConnected { await trading212.sync(context: context, force: true) }
                     if market.isEnabled { await market.refresh(context: context, baseCurrency: baseCurrency, force: true) }
                 }
             }
@@ -195,7 +198,8 @@ struct InvestmentsView: View {
                     NavigationLink { HoldingDetailView(holding: position.holding) } label: {
                         HoldingRow(position: position, baseCurrency: baseCurrency,
                                    status: PriceStatus.describe(holding: position.holding,
-                                                                quote: market.quote(for: position.holding, in: quoteIndex)))
+                                                                quote: market.quote(for: position.holding, in: quoteIndex)),
+                                   countedViaBroker: engine.isSuperseded(position.holding))
                             .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
@@ -211,6 +215,8 @@ struct HoldingRow: View {
     let position: PositionSummary
     let baseCurrency: String
     let status: PriceStatus
+    /// Excluded from totals because the user marked it as already counted via Trading 212.
+    var countedViaBroker = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -221,7 +227,12 @@ struct HoldingRow: View {
                     .lineLimit(1)
                 Text("\(MoneyFormat.quantity(position.position.quantity)) × \(MoneyFormat.string(position.holding.currentPrice, code: position.holding.currencyCode))")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                PriceStatusBadge(status: status)
+                if countedViaBroker {
+                    Label("Counted via Trading 212 · not in totals", systemImage: "link")
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                } else {
+                    PriceStatusBadge(status: status)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {

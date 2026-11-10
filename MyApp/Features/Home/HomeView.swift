@@ -104,7 +104,8 @@ struct HomeView: View {
                 VStack(spacing: 0) {
                     ForEach(visible) { account in
                         NavigationLink { AccountDetailView(account: account) } label: {
-                            AccountRow(account: account, balance: engine.balance(of: account))
+                            AccountRow(account: account, balance: engine.balance(of: account),
+                                       countedViaBroker: engine.isSuperseded(account))
                                 .padding(.vertical, 10)
                         }
                         .buttonStyle(.plain)

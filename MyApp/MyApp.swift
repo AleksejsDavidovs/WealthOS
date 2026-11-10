@@ -4,6 +4,7 @@ import SwiftUI
     @State private var appModel = AppModel()
     @State private var lockManager = AppLockManager()
     @State private var marketData = MarketDataService()
+    @State private var trading212 = Trading212Service.makeForApp()
 
     init() {
         // Online prices stay off until the user enables them; when enabled, refresh on open.
@@ -16,6 +17,7 @@ import SwiftUI
                 .environment(appModel)
                 .environment(lockManager)
                 .environment(marketData)
+                .environment(trading212)
         }
     }
 }

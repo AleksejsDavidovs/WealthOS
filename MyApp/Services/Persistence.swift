@@ -7,7 +7,8 @@ enum Persistence {
     static let modelTypes: [any PersistentModel.Type] = [
         Account.self, TransactionRecord.self, TransactionCategory.self, RecurringRule.self,
         Holding.self, InvestmentTrade.self, PricePoint.self, CurrencyRate.self,
-        NetWorthSnapshot.self, Goal.self, SimulationScenario.self, MarketQuote.self
+        NetWorthSnapshot.self, Goal.self, SimulationScenario.self, MarketQuote.self,
+        BrokerAccountSnapshot.self, BrokerPosition.self, BrokerLink.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }
