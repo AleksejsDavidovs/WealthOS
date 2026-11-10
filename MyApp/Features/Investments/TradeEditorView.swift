@@ -136,7 +136,9 @@ struct TradeEditorView: View {
                 Button("Delete", role: .destructive) {
                     guard let trade else { dismiss(); return }
                     do {
-                        try Persistence.commit(context) { context.delete(trade) }
+                        // Throws (with the reason, e.g. a later sale would oversell) before deleting anything.
+                        try LedgerService.delete(trade: trade, in: context)
+                        try Persistence.commit(context)
                         DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
                         dismiss()
                     } catch {

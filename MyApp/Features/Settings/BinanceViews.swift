@@ -36,7 +36,7 @@ struct BinanceSettingsView: View {
                     if !service.isConnected { cachedSection(snapshot) }
                     duplicatesSection
                 }
-                if service.isConnected { disconnectSection }
+                if service.isConnected || service.hasLeftoverCredential { disconnectSection }
             }
             aboutSection
         }
@@ -138,6 +138,7 @@ struct BinanceSettingsView: View {
         let suggestedHoldings = Dictionary(BinanceMatching.holdingCandidates(holdings: holdings, assets: assets, links: links)
             .map { ($0.holding.id, $0.asset) }, uniquingKeysWith: { a, _ in a })
         let suggestedAccounts = Set(BinanceMatching.accountCandidates(accounts: accounts, links: links).map(\.id))
+        let ambiguousHoldings = Set(BinanceMatching.ambiguousHoldings(holdings: holdings, assets: assets, links: links).map(\.id))
         let shownHoldings = holdings.filter { $0.assetClass == .crypto || linked.contains($0.id) }
         let shownAccounts = accounts.filter {
             linked.contains($0.id) || suggestedAccounts.contains($0.id) || ($0.kind == .crypto && !$0.isArchived)
@@ -150,7 +151,8 @@ struct BinanceSettingsView: View {
                 }
                 ForEach(shownHoldings) { holding in
                     linkToggle(title: holding.symbol.isEmpty ? holding.name : holding.symbol,
-                               detail: suggestedHoldings[holding.id].map { "Binance also holds \($0)" },
+                               detail: suggestedHoldings[holding.id].map { "Binance also holds \($0)" }
+                                   ?? (ambiguousHoldings.contains(holding.id) ? "Ambiguous or conflicting identifiers — check before linking" : nil),
                                isOn: linked.contains(holding.id), kind: .holding, id: holding.id)
                 }
             } header: {
@@ -292,9 +294,10 @@ struct BinancePortfolioCard: View {
             InfoBanner(text: "No reliable EUR price on Binance for \(unpriced.joined(separator: ", ")). \(unpriced.count == 1 ? "It's" : "They're") shown by quantity and left out of totals.",
                        symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
-        if earnUnreadable(snapshot) {
-            InfoBanner(text: "Simple Earn isn't readable with this API key, so Earn balances are unknown — not zero — and aren't included.",
-                       symbol: "eye.slash", tint: .orange)
+        let incomplete = engine.binanceIncompleteReasons
+        if !incomplete.isEmpty {
+            InfoBanner(text: "Incomplete valuation — the total only includes balances confirmed in the last sync. " + incomplete.joined(separator: " "),
+                       symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
         if !snapshot.mergedSpotAssets.isEmpty {
             InfoBanner(text: "Binance also lists Flexible Earn in Spot (\(snapshot.mergedSpotAssets)). Those are counted once, as Earn.")
@@ -316,6 +319,10 @@ struct BinancePortfolioCard: View {
                 TimelineView(.everyMinute) { _ in
                     Text(service.isSyncing ? "Syncing…" : "Synced \(snapshot.syncedAt.relativeDescription)")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if snapshot.restoredFromBackup {
+                    Text("Restored from backup — not re-synced yet, values may be outdated")
+                        .font(.caption).foregroundStyle(Theme.warning).lineLimit(2)
                 }
                 if let error = service.lastError {
                     Text(error.errorDescription ?? "Sync failed.")
@@ -371,6 +378,10 @@ struct BinanceAssetRow: View {
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 Text(value.wallets.map(\.title).joined(separator: " · "))
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                if value.unconfirmedQuantity > 0 {
+                    Text("+ \(Self.quantity(value.unconfirmedQuantity)) last known in Earn · not refreshed, not counted")
+                        .font(.caption2).foregroundStyle(Theme.warning).lineLimit(2)
+                }
                 Text(priceStatus)
                     .font(.caption2).foregroundStyle(value.priceEUR == nil ? Theme.warning : .secondary).lineLimit(2)
             }

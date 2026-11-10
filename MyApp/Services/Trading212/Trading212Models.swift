@@ -24,6 +24,8 @@ final class BrokerAccountSnapshot {
     /// The provider's own total. Shown for reconciliation only — never added to net worth.
     var reportedTotal: Decimal?
     var syncedAt: Date = Date()
+    /// Came from a backup and hasn't been re-synced since; values are last known, not verified.
+    var restoredFromBackup: Bool = false
 
     init(environment: Trading212Environment, currencyCode: String, syncedAt: Date) {
         self.environmentRaw = environment.rawValue

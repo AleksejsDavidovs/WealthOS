@@ -380,7 +380,7 @@ struct AppLockAuthorizationTests {
         #expect(lock.isPINEnabled == false)
         try await lock.enrollPIN("135790")
         #expect(lock.isPINEnabled == true)
-        lock.disablePIN()
+        try lock.disablePIN()
         #expect(lock.isPINEnabled == false)
     }
 
@@ -637,7 +637,7 @@ struct AppPINManagerTests {
         let manager = AppPINManager(store: secrets)
         try manager.enroll("246810")
 
-        manager.disable()
+        try manager.disable()
 
         #expect(manager.isEnrolled == false)
         #expect(manager.verify("246810") == .notEnrolled)

@@ -35,6 +35,10 @@ struct HomeView: View {
                             InfoBanner(text: "Missing exchange rate for \(engine.summary.missingRateCurrencies.sorted().joined(separator: ", ")). Those balances are excluded from totals until you add a rate in Settings.",
                                        symbol: "exclamationmark.triangle.fill", tint: .orange)
                         }
+                        if !engine.summary.incompleteSources.isEmpty {
+                            InfoBanner(text: "Unverified valuation: \(engine.summary.incompleteSources.sorted().joined(separator: ", ")) couldn't be fully confirmed. Amounts that might be counted twice are left out, and restored or cached data may not be current — see Investments for details.",
+                                       symbol: "exclamationmark.triangle.fill", tint: .orange)
+                        }
                         NetWorthChartCard(snapshots: baseSnapshots, code: baseCurrency,
                                           onRecord: { showSnapshotEditor = true })
                         breakdownGrid(engine.summary)

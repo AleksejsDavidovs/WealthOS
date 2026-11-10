@@ -12,6 +12,10 @@ nonisolated struct NetWorthSummary: Equatable, Sendable {
     var liabilities: Decimal = 0
     /// Currencies that could not be converted because no exchange rate was entered.
     var missingRateCurrencies: Set<String> = []
+    /// Sources whose value couldn't be fully confirmed (e.g. a Binance Earn product that didn't
+    /// refresh, or a holding with an invalid trade history). Their unconfirmed part is excluded,
+    /// so the totals are a confirmed lower bound — never a possibly duplicated amount.
+    var incompleteSources: Set<String> = []
 
     var investments: Decimal { investmentAccounts + holdingsValue }
     var totalAssets: Decimal { liquid + investments + otherAssets }
@@ -71,12 +75,20 @@ struct BinancePortfolio {
 }
 
 /// One cryptocurrency across all Binance wallets (Spot + Flexible + Locked), counted once.
+///
+/// Only rows read in the latest successful sync are *confirmed* and counted. Rows kept from an
+/// Earn product that failed to refresh are *unconfirmed*: their coins may since have moved to
+/// Spot (a redemption), so counting them would risk counting the same coins twice.
 struct BinanceAssetValue: Identifiable {
     let asset: String
     let rows: [BinanceHolding]
+    /// Confirmed quantity (Spot + freshly read Earn).
     let quantity: Decimal
     let spotQuantity: Decimal
     let earnQuantity: Decimal
+    /// Last known Earn quantity that couldn't be refreshed; shown, never counted.
+    let unconfirmedQuantity: Decimal
+    let unconfirmedValueEUR: Decimal?
     /// The most recently refreshed price among the rows; nil = no validated EUR price.
     let priceEUR: Decimal?
     let priceRoute: String
@@ -166,7 +178,7 @@ struct FinanceEngine {
             + trades.lazy.filter { $0.date > endOfToday }.count
         let balances = Self.computeBalances(accounts: accounts, transactions: transactions, trades: trades, asOf: endOfToday)
         self.balances = balances
-        let positions = Self.computePositions(holdings: holdings, trades: trades, converter: converter)
+        let positions = Self.computePositions(holdings: holdings, trades: trades, converter: converter, asOf: endOfToday)
         self.positions = positions
         let supersededAccounts = broker.supersededAccountIDs.union(binance.supersededAccountIDs)
         let supersededHoldings = broker.supersededHoldingIDs.union(binance.supersededHoldingIDs)
@@ -192,25 +204,61 @@ struct FinanceEngine {
                 summary.missingRateCurrencies.insert(BinancePricing.target)
             }
         }
+        if binance.snapshot != nil, !Self.binanceIncompleteReasons(binance, assets: binanceAssets).isEmpty {
+            summary.incompleteSources.insert("Binance")
+        }
+        // Restored provider data is the last known state at backup time, not a verified balance.
+        if broker.snapshot?.restoredFromBackup == true { summary.incompleteSources.insert("Trading 212") }
+        if binance.snapshot?.restoredFromBackup == true { summary.incompleteSources.insert("Binance") }
         self.summary = summary
     }
 
     // MARK: Binance
 
+    /// A row is confirmed when the latest successful sync read it (Spot always; Earn only when
+    /// that product refreshed). Kept rows carry an older `syncedAt`.
+    static func isConfirmed(_ row: BinanceHolding, in binance: BinancePortfolio) -> Bool {
+        guard let snapshot = binance.snapshot else { return true }
+        return row.syncedAt >= snapshot.syncedAt
+    }
+
     static func computeBinanceAssets(_ binance: BinancePortfolio, converter: CurrencyConverter) -> [BinanceAssetValue] {
         Dictionary(grouping: binance.holdings, by: \.asset).map { asset, rows in
-            let quantity = rows.reduce(Decimal(0)) { $0 + $1.amount }
-            let spot = rows.filter { $0.wallet == .spot }.reduce(Decimal(0)) { $0 + $1.amount }
+            let confirmed = rows.filter { isConfirmed($0, in: binance) }
+            let quantity = confirmed.reduce(Decimal(0)) { $0 + $1.amount }
+            let spot = confirmed.filter { $0.wallet == .spot }.reduce(Decimal(0)) { $0 + $1.amount }
+            let unconfirmed = rows.filter { !isConfirmed($0, in: binance) }.reduce(Decimal(0)) { $0 + $1.amount }
             let priced = rows.filter { $0.priceEUR != nil }.max { ($0.pricedAt ?? .distantPast) < ($1.pricedAt ?? .distantPast) }
             let price = priced?.priceEUR
             func base(_ amount: Decimal) -> Decimal? { price.flatMap { converter.toBase(amount * $0, from: BinancePricing.target) } }
             return BinanceAssetValue(asset: asset, rows: rows, quantity: quantity, spotQuantity: spot, earnQuantity: quantity - spot,
+                                     unconfirmedQuantity: unconfirmed, unconfirmedValueEUR: price.map { unconfirmed * $0 },
                                      priceEUR: price, priceRoute: priced?.priceRoute ?? "", pricedAt: priced?.pricedAt,
                                      valueEUR: price.map { quantity * $0 }, valueBase: base(quantity),
                                      spotBase: base(spot), earnBase: base(quantity - spot))
         }
         .sorted { ($0.valueBase ?? -1, $1.asset) > ($1.valueBase ?? -1, $0.asset) }
     }
+
+    /// Why the Binance total isn't a complete, confirmed figure; empty when it is.
+    static func binanceIncompleteReasons(_ binance: BinancePortfolio, assets: [BinanceAssetValue]) -> [String] {
+        guard let snapshot = binance.snapshot else { return [] }
+        var reasons: [String] = []
+        for (title, status) in [("Flexible Earn", snapshot.flexibleStatus), ("Locked Earn", snapshot.lockedStatus)] {
+            switch status {
+            case .ok: break
+            case .unavailable: reasons.append("\(title) isn't readable with this API key, so its balance is unknown.")
+            case .failed, .notChecked: reasons.append("\(title) couldn't be refreshed in the last sync.")
+            }
+        }
+        let stale = assets.filter { $0.unconfirmedQuantity > 0 }.map(\.asset)
+        if !stale.isEmpty {
+            reasons.append("Last known Earn balances of \(stale.joined(separator: ", ")) aren't counted: they may have moved to Spot since, and counting both could double them.")
+        }
+        return reasons
+    }
+
+    var binanceIncompleteReasons: [String] { Self.binanceIncompleteReasons(binance, assets: binanceAssets) }
 
     /// Priced Binance assets in the base currency. Unpriced assets are excluded, never zero.
     var binanceTotalBase: Decimal { binanceAssets.compactMap(\.valueBase).reduce(0, +) }
@@ -312,25 +360,31 @@ struct FinanceEngine {
 
     // MARK: Investments
 
-    static func computePositions(holdings: [Holding], trades: [InvestmentTrade], converter: CurrencyConverter) -> [PositionSummary] {
-        let grouped = Dictionary(grouping: trades, by: \.holdingID)
+    /// - Parameter date: Only trades dated on or before this cutoff count — the same cutoff as
+    ///   cash balances, so a future-dated buy/sell changes neither holdings nor cash until its date.
+    /// - Returns: For a holding whose trade history is invalid (e.g. it sells more than it owns),
+    ///   quantity and value are *unknown*: all base values are nil and `error` is set. It is never
+    ///   valued at zero, and `computeSummary` reports it as incomplete.
+    static func computePositions(holdings: [Holding], trades: [InvestmentTrade], converter: CurrencyConverter,
+                                 asOf date: Date? = nil) -> [PositionSummary] {
+        let grouped = Dictionary(grouping: trades.filter { trade in date.map { trade.date <= $0 } ?? true }, by: \.holdingID)
         return holdings.map { holding in
             let inputs = (grouped[holding.id] ?? []).map {
                 TradeInput(kind: $0.kind, date: $0.date, quantity: $0.quantity, price: $0.pricePerUnit, fee: $0.fee, createdAt: $0.createdAt)
             }
-            var position = PositionResult()
-            var errorMessage: String?
             do {
-                position = try InvestmentCalculator.position(for: inputs)
+                let position = try InvestmentCalculator.position(for: inputs)
+                let marketValue = position.quantity * holding.currentPrice
+                return PositionSummary(holding: holding, position: position, marketValue: marketValue,
+                                       marketValueBase: converter.toBase(marketValue, from: holding.currencyCode),
+                                       costBasisBase: converter.toBase(position.costBasis, from: holding.currencyCode),
+                                       realizedBase: converter.toBase(position.realizedProfit, from: holding.currencyCode),
+                                       error: nil)
             } catch {
-                errorMessage = error.localizedDescription
+                return PositionSummary(holding: holding, position: PositionResult(), marketValue: 0,
+                                       marketValueBase: nil, costBasisBase: nil, realizedBase: nil,
+                                       error: error.localizedDescription)
             }
-            let marketValue = position.quantity * holding.currentPrice
-            return PositionSummary(holding: holding, position: position, marketValue: marketValue,
-                                   marketValueBase: converter.toBase(marketValue, from: holding.currencyCode),
-                                   costBasisBase: converter.toBase(position.costBasis, from: holding.currencyCode),
-                                   realizedBase: converter.toBase(position.realizedProfit, from: holding.currencyCode),
-                                   error: errorMessage)
         }
     }
 
@@ -359,7 +413,7 @@ struct FinanceEngine {
     }
     /// Positions whose cost basis (and so P/L) isn't available. Binance balances never carry one.
     var positionsWithoutCost: Int {
-        countedPositions.filter { $0.costBasisBase == nil }.count + brokerPositions.filter { $0.costBase == nil }.count
+        countedPositions.filter { $0.costBasisBase == nil && $0.error == nil }.count + brokerPositions.filter { $0.costBase == nil }.count
             + binanceAssets.count
     }
     var hasAnyPositions: Bool { !positions.isEmpty || !brokerPositions.isEmpty || !binanceAssets.isEmpty }
@@ -401,7 +455,10 @@ struct FinanceEngine {
             }
         }
         for position in positions {
-            if let value = position.marketValueBase {
+            if position.error != nil {
+                // Value unknown, not zero: excluded and reported.
+                summary.incompleteSources.insert("Investments")
+            } else if let value = position.marketValueBase {
                 summary.holdingsValue += value
             } else if position.marketValue != 0 {
                 summary.missingRateCurrencies.insert(position.holding.currencyCode)

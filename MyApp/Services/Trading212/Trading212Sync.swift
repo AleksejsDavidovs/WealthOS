@@ -100,6 +100,7 @@ enum Trading212Reconciler {
         snapshot.realizedProfitLoss = summary.investments?.realizedProfitLoss
         snapshot.reportedTotal = summary.totalValue
         snapshot.syncedAt = now
+        snapshot.restoredFromBackup = false
 
         let existing = try context.fetch(FetchDescriptor<BrokerPosition>())
         var byTicker: [String: BrokerPosition] = [:]
@@ -175,15 +176,56 @@ enum Trading212Matching {
         return result
     }
 
-    /// Manual holdings that look like a synced Trading 212 position and aren't linked yet.
-    static func holdingCandidates(holdings: [Holding], positions: [BrokerPosition], links: [BrokerLink]) -> [(holding: Holding, position: BrokerPosition)] {
-        let linked = Set(links.filter { $0.kind == .holding }.map(\.localID))
-        return holdings.compactMap { holding in
-            guard !linked.contains(holding.id), holding.assetClass != .crypto else { return nil }
-            let mine = symbols(of: holding)
-            guard let match = positions.first(where: { !symbols(of: $0).isDisjoint(with: mine) }) else { return nil }
-            return (holding, match)
+    /// "GBX" (pence) and "GBP" quote the same London listing.
+    static func listingCurrency(_ code: String) -> String {
+        let upper = code.trimmingCharacters(in: .whitespaces).uppercased()
+        return upper == "GBX" ? "GBP" : upper
+    }
+
+    /// Same instrument, not merely the same letters: the symbol must overlap, the asset class
+    /// must agree when Trading 212 reports one, and the listing currency must agree when known
+    /// (VUSA in GBP on London and VUSA in EUR on Amsterdam are different listings).
+    static func isCompatible(_ holding: Holding, _ position: BrokerPosition) -> Bool {
+        guard holding.assetClass != .crypto, !symbols(of: position).isDisjoint(with: symbols(of: holding)) else { return false }
+        if position.assetClass == .etf || position.assetClass == .stock, holding.assetClass != position.assetClass { return false }
+        let positionCurrency = listingCurrency(position.instrumentCurrency)
+        if !positionCurrency.isEmpty {
+            let mine = Set([holding.currencyCode, holding.marketCurrencyCode].map(listingCurrency).filter { !$0.isEmpty })
+            if !mine.contains(positionCurrency) { return false }
         }
+        return true
+    }
+
+    /// Manual holdings that clearly correspond to exactly one synced Trading 212 position (and
+    /// that position to exactly one holding) and aren't linked yet. Suggestions only.
+    static func holdingCandidates(holdings: [Holding], positions: [BrokerPosition], links: [BrokerLink]) -> [(holding: Holding, position: BrokerPosition)] {
+        let (unique, _) = classify(holdings: holdings, positions: positions, links: links)
+        return unique
+    }
+
+    /// Unlinked holdings that resemble more than one position (or share one with another
+    /// holding). Never suggested as a specific match — the user has to decide.
+    static func ambiguousHoldings(holdings: [Holding], positions: [BrokerPosition], links: [BrokerLink]) -> [Holding] {
+        classify(holdings: holdings, positions: positions, links: links).ambiguous
+    }
+
+    private static func classify(holdings: [Holding], positions: [BrokerPosition], links: [BrokerLink])
+        -> (unique: [(holding: Holding, position: BrokerPosition)], ambiguous: [Holding]) {
+        let linked = Set(links.filter { $0.kind == .holding }.map(\.localID))
+        let open = holdings.filter { !linked.contains($0.id) }
+        let matches = open.map { holding in (holding, positions.filter { isCompatible(holding, $0) }) }
+        var claims: [String: Int] = [:]
+        for (_, found) in matches { for position in found { claims[position.ticker, default: 0] += 1 } }
+        var unique: [(holding: Holding, position: BrokerPosition)] = []
+        var ambiguous: [Holding] = []
+        for (holding, found) in matches where !found.isEmpty {
+            if found.count == 1, let position = found.first, claims[position.ticker] == 1 {
+                unique.append((holding, position))
+            } else {
+                ambiguous.append(holding)
+            }
+        }
+        return (unique, ambiguous)
     }
 
     /// Manual accounts that appear to represent the same Trading 212 cash.
@@ -204,7 +246,7 @@ enum Trading212Matching {
 @MainActor
 @Observable
 final class Trading212Service {
-    private(set) var isConnected: Bool
+    private(set) var isConnected = false
     private(set) var isSyncing = false
     private(set) var lastError: Trading212Error?
     private(set) var lastFailureAt: Date?
@@ -242,7 +284,7 @@ final class Trading212Service {
     }
 
     init(http: HTTPClient = Trading212Transport(),
-         secrets: SecretStore = KeychainStore(service: "WealthOS.Trading212"),
+         secrets: SecretStore = KeychainStore(service: "WealthOS.Trading212", accessibility: .whenUnlocked),
          defaults: UserDefaults = .standard,
          sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.http = http
@@ -250,7 +292,21 @@ final class Trading212Service {
         self.defaults = defaults
         self.sleep = sleep
         environment = Trading212Environment(rawValue: defaults.string(forKey: Self.environmentKey) ?? "") ?? .live
-        isConnected = secrets.read(Self.keyAccount) != nil && secrets.read(Self.secretAccount) != nil
+        reloadConnectionState()
+    }
+
+    /// Half of a key/secret pair left behind by an earlier failed deletion; Disconnect removes it.
+    private(set) var hasLeftoverCredential = false
+
+    /// Re-reads the Keychain (and moves older items to the "when unlocked" class). Call when the
+    /// app becomes active: the credentials are readable only while the device is unlocked, so a
+    /// launch while locked sees nothing. Never deletes anything — unreadable isn't proof of absence.
+    func reloadConnectionState() {
+        for account in [Self.keyAccount, Self.secretAccount] { secrets.upgradeProtection(account) }
+        let hasKey = secrets.read(Self.keyAccount) != nil
+        let hasSecret = secrets.read(Self.secretAccount) != nil
+        isConnected = hasKey && hasSecret
+        hasLeftoverCredential = hasKey != hasSecret
     }
 
     var needsReconnect: Bool { lastError == .invalidCredentials || lastError == .missingPermission }
@@ -273,11 +329,19 @@ final class Trading212Service {
         do {
             let snapshot = try await download(client: client, forceInstruments: true)
             guard started == generation else { throw CancellationError() }
-            try store(credentials)
+            // All-or-nothing: the new key is only kept if the first snapshot is saved too.
+            let previous = storedCredentials()
+            try store(credentials, restoringOnFailure: previous)
+            do {
+                try save(snapshot, environment: environment, now: now, context: context)
+            } catch {
+                restoreCredentials(previous)
+                throw error
+            }
             self.environment = environment
             defaults.set(environment.rawValue, forKey: Self.environmentKey)
             isConnected = true
-            try save(snapshot, environment: environment, now: now, context: context)
+            hasLeftoverCredential = false
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -323,11 +387,19 @@ final class Trading212Service {
 
     /// Deletes the stored credentials. `removeData` also deletes the cached Trading 212
     /// snapshot and duplicate links; manual holdings, accounts and transactions are never touched.
+    /// Throws `.credentialStorage` — and keeps reporting whatever is still stored — if the
+    /// Keychain refuses to delete either value; it never claims a disconnect that didn't happen.
     func disconnect(removeData: Bool, context: ModelContext) throws {
         generation += 1
-        try? secrets.delete(Self.keyAccount)
-        try? secrets.delete(Self.secretAccount)
-        isConnected = false
+        var deletionFailed = false
+        for account in [Self.keyAccount, Self.secretAccount] {
+            do { try secrets.delete(account) } catch { deletionFailed = true }
+        }
+        let hasKey = secrets.read(Self.keyAccount) != nil
+        let hasSecret = secrets.read(Self.secretAccount) != nil
+        isConnected = hasKey && hasSecret
+        hasLeftoverCredential = hasKey != hasSecret
+        guard !deletionFailed else { throw Trading212Error.credentialStorage }
         lastError = nil
         lastFailureAt = nil
         automaticRetryAfter = nil
@@ -369,8 +441,11 @@ final class Trading212Service {
         return positions.contains { !known.contains($0.ticker) }
     }
 
+    /// Injectable for tests (e.g. a failing disk); always `context.save()` in the app.
+    var saveContext: (ModelContext) throws -> Void = { try $0.save() }
+
     private func save(_ download: Download, environment: Trading212Environment, now: Date, context: ModelContext) throws {
-        try Persistence.commit(context) {
+        try Persistence.commit(context, save: saveContext) {
             try Trading212Reconciler.apply(summary: download.summary, positions: download.positions,
                                            instruments: download.instruments, environment: environment, now: now, in: context)
         }
@@ -383,7 +458,8 @@ final class Trading212Service {
 
     /// Records the failure; the cached snapshot is left exactly as it was.
     private func record(_ error: Error, now: Date) {
-        let mapped = (error as? Trading212Error) ?? (error is PersistenceError ? .invalidResponse : .network)
+        let mapped: Trading212Error = (error as? Trading212Error)
+            ?? (error is PersistenceError ? .localSaveFailed : error is KeychainError ? .credentialStorage : .network)
         lastError = mapped
         lastFailureAt = now
         automaticRetryAfter = now.addingTimeInterval(Self.automaticBackoff(after: mapped))
@@ -399,15 +475,30 @@ final class Trading212Service {
         }
     }
 
-    private func store(_ credentials: Trading212Credentials) throws {
+    /// Writes both values; on failure puts `previous` back (or removes both), so the Keychain
+    /// never keeps a mismatched key/secret pair and a failed reconnect doesn't lose a working key.
+    private func store(_ credentials: Trading212Credentials, restoringOnFailure previous: Trading212Credentials?) throws {
         do {
             try secrets.save(credentials.apiKey, account: Self.keyAccount)
             try secrets.save(credentials.apiSecret, account: Self.secretAccount)
         } catch {
+            restoreCredentials(previous)
+            throw Trading212Error.credentialStorage
+        }
+    }
+
+    private func restoreCredentials(_ previous: Trading212Credentials?) {
+        if let previous {
+            try? secrets.save(previous.apiKey, account: Self.keyAccount)
+            try? secrets.save(previous.apiSecret, account: Self.secretAccount)
+        } else {
             try? secrets.delete(Self.keyAccount)
             try? secrets.delete(Self.secretAccount)
-            throw error
         }
+        let hasKey = secrets.read(Self.keyAccount) != nil
+        let hasSecret = secrets.read(Self.secretAccount) != nil
+        isConnected = hasKey && hasSecret
+        hasLeftoverCredential = hasKey != hasSecret
     }
 
     private func storedCredentials() -> Trading212Credentials? {

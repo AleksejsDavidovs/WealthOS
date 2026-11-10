@@ -116,7 +116,9 @@ struct SettingsView: View {
                                 Label("Change App PIN", systemImage: "number")
                             }
                             Button("Turn Off App PIN", role: .destructive) {
-                                authorizePINChange { lock.disablePIN() }
+                                authorizePINChange {
+                                    do { try lock.disablePIN() } catch { errorMessage = error.localizedDescription }
+                                }
                             }
                         } else {
                             Button { authorizePINChange { showPINSetup = true } } label: {
@@ -276,8 +278,9 @@ struct SettingsView: View {
             try Trading212Reconciler.removeAllData(in: context)
             try BinanceReconciler.removeAllData(in: context)
             try context.save()
-            try? trading212.disconnect(removeData: false, context: context)
-            try? binance.disconnect(removeData: false, context: context)
+            var keychainProblem = false
+            do { try trading212.disconnect(removeData: false, context: context) } catch { keychainProblem = true }
+            do { try binance.disconnect(removeData: false, context: context) } catch { keychainProblem = true }
             market.deleteAllKeys()
             marketEnabled = false
             for key in [SettingsKey.estimatedIncome, SettingsKey.estimatedExpenses, SettingsKey.importedFileHashes,
@@ -285,7 +288,11 @@ struct SettingsView: View {
                 UserDefaults.standard.removeObject(forKey: key)
             }
             hasCompletedOnboarding = false
-            dismiss()
+            if keychainProblem {
+                errorMessage = "Your data was erased, but an API key couldn't be removed from the Keychain. Open Integrations and disconnect again."
+            } else {
+                dismiss()
+            }
         } catch {
             context.rollback()
             errorMessage = "Reset failed. Your data was not changed."

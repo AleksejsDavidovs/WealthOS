@@ -128,6 +128,9 @@ struct MainTabView: View {
     /// service refuses overlapping runs and backs off after failures, so rapid
     /// foreground/background switches cause at most one request set per provider.
     private func autoSyncIntegrations() {
+        // Credentials are "when unlocked" Keychain items: re-read them now that the app is active.
+        trading212.reloadConnectionState()
+        binance.reloadConnectionState()
         guard !app.isDemoMode, let real = app.persistentContainer?.mainContext else { return }
         if trading212.isConnected { Task { await trading212.syncIfStale(context: real) } }
         if binance.isConnected { Task { await binance.syncIfStale(context: real) } }

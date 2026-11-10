@@ -46,7 +46,7 @@ struct PINDotsView: View {
             }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.55), value: feedback)
-        .keyframeAnimator(initialValue: 0.0, trigger: shakeTrigger) { content, offset in
+        .keyframeAnimator(initialValue: 0.0, trigger: shakeTrigger) { [reduceMotion] content, offset in
             content.offset(x: reduceMotion ? 0 : offset)
         } keyframes: { _ in
             KeyframeTrack {

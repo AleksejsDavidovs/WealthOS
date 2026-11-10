@@ -132,6 +132,19 @@ enum LedgerService {
 
     // MARK: Investments
 
+    /// Deletes one trade only if the holding's remaining history stays valid at every date —
+    /// e.g. a buy that a later sell depends on can't be removed (it would leave an oversold,
+    /// unvaluable position). Throws the calculator's error and changes nothing otherwise.
+    static func delete(trade: InvestmentTrade, in context: ModelContext) throws {
+        let holdingID = trade.holdingID
+        let tradeID = trade.id
+        let remaining = try context.fetch(FetchDescriptor<InvestmentTrade>())
+            .filter { $0.holdingID == holdingID && $0.id != tradeID }
+            .map { TradeInput(kind: $0.kind, date: $0.date, quantity: $0.quantity, price: $0.pricePerUnit, fee: $0.fee, createdAt: $0.createdAt) }
+        _ = try InvestmentCalculator.position(for: remaining)
+        context.delete(trade)
+    }
+
     static func delete(holding: Holding, in context: ModelContext) throws {
         let id = holding.id
         for trade in try context.fetch(FetchDescriptor<InvestmentTrade>()) where trade.holdingID == id {

@@ -46,6 +46,8 @@ final class BinanceAccountSnapshot {
     var pricesFetchedAt: Date?
     /// Spot rows such as "LDETH" left out because Flexible Earn already reports that asset.
     var mergedSpotAssets: String = ""
+    /// Came from a backup and hasn't been re-synced since; values are last known, not verified.
+    var restoredFromBackup: Bool = false
 
     init(syncedAt: Date) {
         self.syncedAt = syncedAt

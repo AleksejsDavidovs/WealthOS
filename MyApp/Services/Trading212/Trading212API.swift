@@ -54,6 +54,8 @@ nonisolated enum Trading212Error: LocalizedError, Equatable, Sendable {
     case invalidResponse
     case blockedRequest
     case busy
+    case credentialStorage
+    case localSaveFailed
 
     /// Never includes credentials or response bodies.
     var errorDescription: String? {
@@ -71,6 +73,8 @@ nonisolated enum Trading212Error: LocalizedError, Equatable, Sendable {
         case .invalidResponse: "Trading 212 returned data WealthOS couldn't read. Nothing was changed."
         case .blockedRequest: "Blocked a request that wasn't a read-only call to Trading 212."
         case .busy: "A Trading 212 sync is already running."
+        case .credentialStorage: "The iOS Keychain didn't accept the change, so the previous Trading 212 connection state was kept. Try again."
+        case .localSaveFailed: "WealthOS couldn't save the Trading 212 data on this iPhone. Nothing was changed."
         }
     }
 }

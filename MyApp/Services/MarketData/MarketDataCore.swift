@@ -276,6 +276,29 @@ nonisolated protocol SecretStore: Sendable {
     func read(_ account: String) -> String?
     func save(_ value: String, account: String) throws
     func delete(_ account: String) throws
+    /// Moves an existing item to the store's current protection class, keeping its value.
+    func upgradeProtection(_ account: String)
+}
+
+nonisolated extension SecretStore {
+    func upgradeProtection(_ account: String) {}
+}
+
+/// Keychain protection classes WealthOS uses. Both are device-only (never synced or migrated
+/// to another device through backups).
+nonisolated enum KeychainAccessibility: Sendable {
+    /// Readable after the first unlock since boot, including while the device is locked again.
+    case afterFirstUnlock
+    /// Readable only while the device is unlocked. Used for brokerage/exchange API credentials,
+    /// which are only needed for foreground syncs.
+    case whenUnlocked
+
+    var value: CFString {
+        switch self {
+        case .afterFirstUnlock: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        case .whenUnlocked: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        }
+    }
 }
 
 nonisolated enum KeychainError: LocalizedError {
@@ -287,6 +310,7 @@ nonisolated enum KeychainError: LocalizedError {
 /// never synced to iCloud and never included in WealthOS backups.
 nonisolated struct KeychainStore: SecretStore {
     var service = "WealthOS.MarketData"
+    var accessibility: KeychainAccessibility = .afterFirstUnlock
 
     private func baseQuery(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -308,7 +332,7 @@ nonisolated struct KeychainStore: SecretStore {
     func save(_ value: String, account: String) throws {
         let data = Data(value.utf8)
         let update: [String: Any] = [kSecValueData as String: data,
-                                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+                                     kSecAttrAccessible as String: accessibility.value]
         var status = SecItemUpdate(baseQuery(account) as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var add = baseQuery(account)
@@ -321,5 +345,19 @@ nonisolated struct KeychainStore: SecretStore {
     func delete(_ account: String) throws {
         let status = SecItemDelete(baseQuery(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.status(status) }
+    }
+
+    /// Changes only the protection attribute of an existing item; the secret itself is never
+    /// read, rewritten or deleted. A no-op when the item is missing, unreadable (e.g. the device
+    /// is locked) or already in the right class — so it can't lose a credential.
+    func upgradeProtection(_ account: String) {
+        var query = baseQuery(account)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let attributes = result as? [String: Any],
+              (attributes[kSecAttrAccessible as String] as? String) != (accessibility.value as String) else { return }
+        _ = SecItemUpdate(baseQuery(account) as CFDictionary, [kSecAttrAccessible as String: accessibility.value] as CFDictionary)
     }
 }

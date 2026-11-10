@@ -6,12 +6,14 @@ nonisolated enum PINError: LocalizedError {
     case invalidFormat
     case keyDerivationFailed
     case storageFailed
+    case removalFailed
 
     var errorDescription: String? {
         switch self {
         case .invalidFormat: "Enter exactly six digits."
         case .keyDerivationFailed: "Could not secure the PIN. Try again."
         case .storageFailed: "The PIN couldn't be saved to the Keychain. Try again."
+        case .removalFailed: "The PIN couldn't be removed from the Keychain, so it is still active. Try again."
         }
     }
 }
@@ -39,7 +41,11 @@ nonisolated enum PINVerificationResult: Equatable {
 ///   disabled outright — at most 10 guesses, i.e. a 0.001% chance for a random attacker.
 /// - Attempt state also lives in the Keychain, so it can't be cleared from app Settings.
 ///   If that state can't be written, verification fails closed.
-final class AppPINManager: @unchecked Sendable {
+///
+/// Explicitly `nonisolated`: hashing runs on a detached task (see `AppLockManager.verifyPIN`).
+/// The class holds only constants and a `Sendable` store; concurrent checks are prevented by
+/// `AppLockManager.isVerifyingPIN`, and enrolment only happens while the app is unlocked.
+nonisolated final class AppPINManager: @unchecked Sendable {
     static let pinLength = 6
     static let attemptsBeforeFirstDelay = 3
     static let maxTotalFailures = 10
@@ -80,8 +86,17 @@ final class AppPINManager: @unchecked Sendable {
     }
 
     /// Removes only the PIN verifier and its attempt counters — never financial data.
-    func disable() {
-        try? store.delete(verifierAccount)
+    ///
+    /// The verifier goes first: if that fails, the PIN stays fully active *with* its attempt
+    /// counter (deleting the counter first could reset the brute-force limit on a PIN that
+    /// then remains enrolled) and `PINError.removalFailed` is thrown. Once the verifier is gone
+    /// the PIN is off; a counter that can't be deleted is harmless because `enroll` resets it.
+    func disable() throws {
+        do {
+            try store.delete(verifierAccount)
+        } catch {
+            throw PINError.removalFailed
+        }
         try? store.delete(stateAccount)
     }
 

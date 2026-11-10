@@ -65,6 +65,8 @@ nonisolated enum BinanceError: LocalizedError, Equatable, Sendable {
     case invalidResponse
     case blockedRequest
     case busy
+    case credentialStorage
+    case localSaveFailed
 
     /// Never includes credentials, signatures or response bodies.
     var errorDescription: String? {
@@ -89,6 +91,8 @@ nonisolated enum BinanceError: LocalizedError, Equatable, Sendable {
         case .invalidResponse: "Binance returned data WealthOS couldn't read. Nothing was changed."
         case .blockedRequest: "Blocked a request that wasn't a read-only call to Binance."
         case .busy: "A Binance sync is already running."
+        case .credentialStorage: "The iOS Keychain didn't accept the change, so the previous Binance connection state was kept. Try again."
+        case .localSaveFailed: "WealthOS couldn't save the Binance data on this iPhone. Nothing was changed."
         }
     }
 

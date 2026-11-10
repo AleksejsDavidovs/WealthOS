@@ -2,7 +2,8 @@ import Foundation
 
 /// Plain Codable mirror of the whole database. Encrypted before it ever touches disk.
 nonisolated struct BackupPayload: Codable, Equatable, Sendable {
-    static let currentVersion = 1
+    /// 1: ledger only. 2: adds `external` (non-secret provider snapshots and "Counted via" links).
+    static let currentVersion = 2
 
     var version: Int = currentVersion
     var createdAt: Date
@@ -19,6 +20,9 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     var snapshots: [SnapshotDTO]
     var goals: [GoalDTO]
     var scenarios: [ScenarioDTO]
+    /// Version 2+. Cached Trading 212 / Binance data and reconciliation links — never API keys
+    /// or secrets, which stay in the device Keychain. nil in version 1 backups.
+    var external: ExternalDTO? = nil
 
     var recordCount: Int {
         accounts.count + transactions.count + categories.count + recurringRules.count + holdings.count
@@ -68,6 +72,48 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     }
     struct ScenarioDTO: Codable, Equatable, Sendable {
         var id: UUID, kind: String, name: String, parameters: SimulationParameters, updatedAt: Date
+    }
+
+    // MARK: External providers (version 2)
+
+    struct ExternalDTO: Codable, Equatable, Sendable {
+        var trading212: Trading212DTO?
+        var binance: BinanceDTO?
+    }
+    struct LinkDTO: Codable, Equatable, Sendable {
+        var kind: String, localID: UUID, createdAt: Date
+    }
+    struct Trading212DTO: Codable, Equatable, Sendable {
+        var snapshot: Trading212SnapshotDTO?
+        var positions: [Trading212PositionDTO]
+        var links: [LinkDTO]
+    }
+    struct Trading212SnapshotDTO: Codable, Equatable, Sendable {
+        var environment: String, accountNumber: Int?, currencyCode: String
+        var cashAvailable: Decimal, cashInPies: Decimal, cashReserved: Decimal
+        var investmentsValue: Decimal?, investmentsCost: Decimal?, unrealizedProfitLoss: Decimal?
+        var realizedProfitLoss: Decimal?, reportedTotal: Decimal?, syncedAt: Date
+    }
+    struct Trading212PositionDTO: Codable, Equatable, Sendable {
+        var ticker: String, name: String, shortName: String, instrumentType: String, isin: String
+        var instrumentCurrency: String, quantity: Decimal, averagePrice: Decimal?, currentPrice: Decimal?
+        var valueCurrency: String, currentValue: Decimal?, totalCost: Decimal?, unrealizedProfitLoss: Decimal?
+        var fxImpact: Decimal?, openedAt: Date?, syncedAt: Date
+    }
+    struct BinanceDTO: Codable, Equatable, Sendable {
+        var snapshot: BinanceSnapshotDTO?
+        var holdings: [BinanceHoldingDTO]
+        var links: [LinkDTO]
+    }
+    struct BinanceSnapshotDTO: Codable, Equatable, Sendable {
+        var uid: Int64?, accountType: String, syncedAt: Date
+        var flexibleStatus: String, flexibleSyncedAt: Date?, lockedStatus: String, lockedSyncedAt: Date?
+        var pricesFetchedAt: Date?, mergedSpotAssets: String
+    }
+    struct BinanceHoldingDTO: Codable, Equatable, Sendable {
+        var key: String, asset: String, wallet: String, productRef: String
+        var free: Decimal, locked: Decimal, amount: Decimal
+        var priceEUR: Decimal?, priceRoute: String, pricedAt: Date?, syncedAt: Date
     }
 }
 
@@ -174,5 +220,48 @@ nonisolated extension BackupPayload {
         for goal in goals where goal.targetAmount <= 0 || goal.allocatedAmount < 0 {
             throw BackupValidationError.invalidValue("goal amount")
         }
+        try validateExternal()
     }
+
+    private func validateExternal() throws {
+        guard let external else { return }
+        if version < 2 { throw BackupValidationError.invalidValue("provider data in a version 1 backup") }
+        func links(_ items: [LinkDTO]) throws {
+            for link in items where BrokerLinkKind(rawValue: link.kind) == nil {
+                throw BackupValidationError.invalidValue("link type \(link.kind)")
+            }
+        }
+        if let t212 = external.trading212 {
+            if Set(t212.positions.map(\.ticker)).count != t212.positions.count {
+                throw BackupValidationError.duplicateIdentifiers("Trading 212 position")
+            }
+            if t212.positions.contains(where: { $0.quantity < 0 || $0.ticker.isEmpty }) {
+                throw BackupValidationError.invalidValue("Trading 212 position")
+            }
+            if !t212.positions.isEmpty && t212.snapshot == nil {
+                throw BackupValidationError.brokenReference("Trading 212 positions without an account snapshot")
+            }
+            try links(t212.links)
+        }
+        if let binance = external.binance {
+            if Set(binance.holdings.map(\.key)).count != binance.holdings.count {
+                throw BackupValidationError.duplicateIdentifiers("Binance balance")
+            }
+            if binance.holdings.contains(where: {
+                $0.amount < 0 || $0.free < 0 || $0.locked < 0 || $0.asset.isEmpty || BinanceWallet(rawValue: $0.wallet) == nil
+                    || ($0.priceEUR.map { $0 <= 0 } ?? false)
+            }) {
+                throw BackupValidationError.invalidValue("Binance balance")
+            }
+            if !binance.holdings.isEmpty && binance.snapshot == nil {
+                throw BackupValidationError.brokenReference("Binance balances without an account snapshot")
+            }
+            try links(binance.links)
+        }
+    }
+}
+
+/// Raw values of `BrokerLink.Kind`, usable from nonisolated backup code.
+nonisolated enum BrokerLinkKind: String {
+    case holding, account
 }

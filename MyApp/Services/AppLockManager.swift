@@ -54,9 +54,13 @@ final class AppLockManager {
     let pin: AppPINManager
     private let biometrics: BiometricAuthenticating
 
-    init(biometrics: BiometricAuthenticating = LAContextAuthenticator(), pin: AppPINManager = AppPINManager()) {
+    /// Defaults are created inside this main-actor initializer (not as default-argument
+    /// expressions, which Swift evaluates in a nonisolated context), so no isolation warning
+    /// and no cross-actor construction of the authenticator or PIN store.
+    init(biometrics: BiometricAuthenticating? = nil, pin: AppPINManager? = nil) {
+        let pin = pin ?? AppPINManager()
         isLocked = UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled)
-        self.biometrics = biometrics
+        self.biometrics = biometrics ?? LAContextAuthenticator()
         self.pin = pin
         isPINEnabled = pin.isEnrolled
     }
@@ -212,9 +216,10 @@ final class AppLockManager {
     }
 
     /// Only call after `reauthorize` succeeded.
-    func disablePIN() {
-        pin.disable()
-        isPINEnabled = false
+    /// Throws (leaving the PIN enabled and the UI state unchanged) if the Keychain refuses.
+    func disablePIN() throws {
+        defer { isPINEnabled = pin.isEnrolled }
+        try pin.disable()
         showPINEntry = false
     }
 

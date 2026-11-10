@@ -72,8 +72,55 @@ enum BackupService {
                 guard let parameters = scenario.parameters else { return nil }
                 return .init(id: scenario.id, kind: scenario.kindRaw, name: scenario.name, parameters: parameters,
                              updatedAt: scenario.updatedAt)
-            }
+            },
+            external: try externalPayload(from: context)
         )
+    }
+
+    /// Non-secret provider caches and links. API keys and secrets live only in the Keychain
+    /// and are never read here. Links to records that no longer exist are dropped.
+    static func externalPayload(from context: ModelContext) throws -> BackupPayload.ExternalDTO? {
+        let localIDs = Set(try context.fetch(FetchDescriptor<Account>()).map(\.id) + context.fetch(FetchDescriptor<Holding>()).map(\.id))
+        func links(_ items: [(kind: String, localID: UUID, createdAt: Date)]) -> [BackupPayload.LinkDTO] {
+            items.filter { localIDs.contains($0.localID) }.map { .init(kind: $0.kind, localID: $0.localID, createdAt: $0.createdAt) }
+        }
+        let t212Snapshot = try context.fetch(FetchDescriptor<BrokerAccountSnapshot>()).first
+        let t212Positions = try context.fetch(FetchDescriptor<BrokerPosition>())
+        let t212Links = links(try context.fetch(FetchDescriptor<BrokerLink>()).map { ($0.kindRaw, $0.localID, $0.createdAt) })
+        let binanceSnapshot = try context.fetch(FetchDescriptor<BinanceAccountSnapshot>()).first
+        let binanceHoldings = try context.fetch(FetchDescriptor<BinanceHolding>())
+        let binanceLinks = links(try context.fetch(FetchDescriptor<BinanceLink>()).map { ($0.kindRaw, $0.localID, $0.createdAt) })
+
+        let t212: BackupPayload.Trading212DTO? = (t212Snapshot == nil && t212Links.isEmpty) ? nil : .init(
+            snapshot: t212Snapshot.map {
+                .init(environment: $0.environmentRaw, accountNumber: $0.accountNumber, currencyCode: $0.currencyCode,
+                      cashAvailable: $0.cashAvailable, cashInPies: $0.cashInPies, cashReserved: $0.cashReserved,
+                      investmentsValue: $0.investmentsValue, investmentsCost: $0.investmentsCost,
+                      unrealizedProfitLoss: $0.unrealizedProfitLoss, realizedProfitLoss: $0.realizedProfitLoss,
+                      reportedTotal: $0.reportedTotal, syncedAt: $0.syncedAt)
+            },
+            positions: t212Snapshot == nil ? [] : t212Positions.map {
+                .init(ticker: $0.ticker, name: $0.name, shortName: $0.shortName, instrumentType: $0.instrumentType, isin: $0.isin,
+                      instrumentCurrency: $0.instrumentCurrency, quantity: $0.quantity, averagePrice: $0.averagePrice,
+                      currentPrice: $0.currentPrice, valueCurrency: $0.valueCurrency, currentValue: $0.currentValue,
+                      totalCost: $0.totalCost, unrealizedProfitLoss: $0.unrealizedProfitLoss, fxImpact: $0.fxImpact,
+                      openedAt: $0.openedAt, syncedAt: $0.syncedAt)
+            },
+            links: t212Links)
+        let binance: BackupPayload.BinanceDTO? = (binanceSnapshot == nil && binanceLinks.isEmpty) ? nil : .init(
+            snapshot: binanceSnapshot.map {
+                .init(uid: $0.uid, accountType: $0.accountType, syncedAt: $0.syncedAt,
+                      flexibleStatus: $0.flexibleStatusRaw, flexibleSyncedAt: $0.flexibleSyncedAt,
+                      lockedStatus: $0.lockedStatusRaw, lockedSyncedAt: $0.lockedSyncedAt,
+                      pricesFetchedAt: $0.pricesFetchedAt, mergedSpotAssets: $0.mergedSpotAssets)
+            },
+            holdings: binanceSnapshot == nil ? [] : binanceHoldings.map {
+                .init(key: $0.key, asset: $0.asset, wallet: $0.walletRaw, productRef: $0.productRef, free: $0.free,
+                      locked: $0.locked, amount: $0.amount, priceEUR: $0.priceEUR, priceRoute: $0.priceRoute,
+                      pricedAt: $0.pricedAt, syncedAt: $0.syncedAt)
+            },
+            links: binanceLinks)
+        return (t212 == nil && binance == nil) ? nil : .init(trading212: t212, binance: binance)
     }
 
     /// Encodes and encrypts the database. Returns the encrypted bytes.
@@ -120,21 +167,107 @@ enum BackupService {
         return payload
     }
 
-    /// Replaces all data with the payload. The payload is validated first and every
-    /// change happens in one save; on any failure the context is rolled back so the
-    /// existing data stays intact.
-    static func restore(_ payload: BackupPayload, into context: ModelContext) throws {
+    /// Replaces all data with the payload — ledger *and* provider caches and links, so nothing
+    /// from the device's previous state is mixed into the restored one. The payload is
+    /// validated first and every change happens in one save; on any failure the context is
+    /// rolled back so the existing data stays intact.
+    ///
+    /// - Version 1 backups contain no provider data: caches and links are cleared and are
+    ///   rebuilt by the next sync of a connected provider.
+    /// - Version 2 provider snapshots are restored flagged `restoredFromBackup` (shown as
+    ///   unverified) until the next successful sync. Credentials are never part of a backup.
+    /// - Parameter save: injectable for tests; always `context.save()` in the app.
+    static func restore(_ payload: BackupPayload, into context: ModelContext,
+                        save: (ModelContext) throws -> Void = { try $0.save() }) throws {
         try payload.validate()
         let wasAutosaving = context.autosaveEnabled
         context.autosaveEnabled = false
         defer { context.autosaveEnabled = wasAutosaving }
         do {
             try LedgerService.deleteAllData(in: context)
+            try Trading212Reconciler.removeAllData(in: context)
+            try BinanceReconciler.removeAllData(in: context)
             insert(payload, into: context)
-            try context.save()
+            insertExternal(payload, into: context)
+            try save(context)
         } catch {
             context.rollback()
             throw error
+        }
+    }
+
+    static func insertExternal(_ payload: BackupPayload, into context: ModelContext) {
+        guard let external = payload.external else { return }
+        let localIDs = Set(payload.accounts.map(\.id) + payload.holdings.map(\.id))
+        if let t212 = external.trading212 {
+            if let s = t212.snapshot {
+                let snapshot = BrokerAccountSnapshot(environment: Trading212Environment(rawValue: s.environment) ?? .live,
+                                                     currencyCode: s.currencyCode, syncedAt: s.syncedAt)
+                snapshot.accountNumber = s.accountNumber
+                snapshot.cashAvailable = s.cashAvailable
+                snapshot.cashInPies = s.cashInPies
+                snapshot.cashReserved = s.cashReserved
+                snapshot.investmentsValue = s.investmentsValue
+                snapshot.investmentsCost = s.investmentsCost
+                snapshot.unrealizedProfitLoss = s.unrealizedProfitLoss
+                snapshot.realizedProfitLoss = s.realizedProfitLoss
+                snapshot.reportedTotal = s.reportedTotal
+                snapshot.restoredFromBackup = true
+                context.insert(snapshot)
+                for p in t212.positions {
+                    let row = BrokerPosition(ticker: p.ticker, syncedAt: p.syncedAt)
+                    row.name = p.name
+                    row.shortName = p.shortName
+                    row.instrumentType = p.instrumentType
+                    row.isin = p.isin
+                    row.instrumentCurrency = p.instrumentCurrency
+                    row.quantity = p.quantity
+                    row.averagePrice = p.averagePrice
+                    row.currentPrice = p.currentPrice
+                    row.valueCurrency = p.valueCurrency
+                    row.currentValue = p.currentValue
+                    row.totalCost = p.totalCost
+                    row.unrealizedProfitLoss = p.unrealizedProfitLoss
+                    row.fxImpact = p.fxImpact
+                    row.openedAt = p.openedAt
+                    context.insert(row)
+                }
+            }
+            for link in t212.links where localIDs.contains(link.localID) {
+                context.insert(BrokerLink(kind: BrokerLink.Kind(rawValue: link.kind) ?? .holding, localID: link.localID,
+                                          createdAt: link.createdAt))
+            }
+        }
+        if let binance = external.binance {
+            if let s = binance.snapshot {
+                let snapshot = BinanceAccountSnapshot(syncedAt: s.syncedAt)
+                snapshot.uid = s.uid
+                snapshot.accountType = s.accountType
+                snapshot.flexibleStatusRaw = s.flexibleStatus
+                snapshot.flexibleSyncedAt = s.flexibleSyncedAt
+                snapshot.lockedStatusRaw = s.lockedStatus
+                snapshot.lockedSyncedAt = s.lockedSyncedAt
+                snapshot.pricesFetchedAt = s.pricesFetchedAt
+                snapshot.mergedSpotAssets = s.mergedSpotAssets
+                snapshot.restoredFromBackup = true
+                context.insert(snapshot)
+                for h in binance.holdings {
+                    let row = BinanceHolding(key: h.key, asset: h.asset, wallet: BinanceWallet(rawValue: h.wallet) ?? .spot,
+                                             syncedAt: h.syncedAt)
+                    row.productRef = h.productRef
+                    row.free = h.free
+                    row.locked = h.locked
+                    row.amount = h.amount
+                    row.priceEUR = h.priceEUR
+                    row.priceRoute = h.priceRoute
+                    row.pricedAt = h.pricedAt
+                    context.insert(row)
+                }
+            }
+            for link in binance.links where localIDs.contains(link.localID) {
+                context.insert(BinanceLink(kind: BrokerLink.Kind(rawValue: link.kind) ?? .holding, localID: link.localID,
+                                           createdAt: link.createdAt))
+            }
         }
     }
 

@@ -253,7 +253,10 @@ struct HoldingRow: View {
                     .lineLimit(1)
                 Text("\(MoneyFormat.quantity(position.position.quantity)) × \(MoneyFormat.string(position.holding.currentPrice, code: position.holding.currencyCode))")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                if let countedVia {
+                if position.error != nil {
+                    Label("Invalid trade history · value unknown, not in totals", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.medium)).foregroundStyle(Theme.warning).lineLimit(2)
+                } else if let countedVia {
                     Label("Counted via \(countedVia) · not in totals", systemImage: "link")
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                 } else {
@@ -262,7 +265,7 @@ struct HoldingRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
-                Text(MoneyFormat.string(position.marketValue, code: position.holding.currencyCode))
+                Text(position.error == nil ? MoneyFormat.string(position.marketValue, code: position.holding.currencyCode) : "—")
                     .font(.body.weight(.semibold)).monospacedDigit()
                 if let fraction = position.returnFraction {
                     Text(MoneyFormat.percent(fraction, showSign: true))

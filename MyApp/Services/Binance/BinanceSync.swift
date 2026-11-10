@@ -180,6 +180,7 @@ enum BinanceReconciler {
         snapshot.uid = input.uid
         snapshot.accountType = input.accountType
         snapshot.syncedAt = now
+        snapshot.restoredFromBackup = false
 
         var byKey: [String: BinanceHolding] = [:]
         for row in try context.fetch(FetchDescriptor<BinanceHolding>()) {
@@ -208,9 +209,9 @@ enum BinanceReconciler {
         }
 
         // Binance can also report Flexible Earn inside Spot as "LD<asset>". Drop such a Spot row
-        // only when Flexible Earn really holds that asset, so real coins like LDO are kept.
-        let flexibleAssets = Set(fresh.filter { $0.wallet == .flexible }.map(\.asset)
-            + (keptWallets.contains(.flexible) ? byKey.values.filter { $0.wallet == .flexible }.map(\.asset) : []))
+        // only when Flexible Earn was read in this same sync and really holds that asset, so real
+        // coins like LDO are kept. Stale (kept) Earn rows never justify dropping fresh Spot data.
+        let flexibleAssets = Set(fresh.filter { $0.wallet == .flexible }.map(\.asset))
         var merged: [String] = []
         for balance in input.spot {
             if balance.asset.hasPrefix("LD"), balance.asset.count > 2, flexibleAssets.contains(String(balance.asset.dropFirst(2))) {
@@ -275,15 +276,51 @@ enum BinanceReconciler {
 // MARK: - Duplicate suggestions (never applied automatically)
 
 enum BinanceMatching {
-    /// Manual crypto holdings whose ticker matches a synced Binance asset and that aren't linked yet.
-    static func holdingCandidates(holdings: [Holding], assets: Set<String>, links: [BinanceLink]) -> [(holding: Holding, asset: String)] {
-        let linked = Set(links.filter { $0.kind == .holding }.map(\.localID))
-        return holdings.compactMap { holding in
-            guard holding.assetClass == .crypto, !linked.contains(holding.id) else { return nil }
-            let symbols = Trading212Matching.symbols(of: holding)
-            guard let asset = assets.sorted().first(where: { symbols.contains($0.uppercased()) }) else { return nil }
-            return (holding, asset)
+    /// Tickers a manual crypto holding identifies: its symbol, plus the ticker of its CoinGecko
+    /// id when that id is a known coin. Two different tickers mean conflicting identifiers.
+    static func tickers(of holding: Holding) -> Set<String> {
+        var result: Set<String> = []
+        let symbol = holding.symbol.trimmingCharacters(in: .whitespaces).uppercased()
+        if !symbol.isEmpty { result.insert(symbol) }
+        let coinID = holding.marketSymbol.trimmingCharacters(in: .whitespaces).lowercased()
+        if let known = PopularAssets.crypto.first(where: { $0.symbol.lowercased() == coinID }), !coinID.isEmpty {
+            result.insert(known.ticker.uppercased())
         }
+        return result
+    }
+
+    /// Manual crypto holdings that clearly correspond to exactly one synced Binance asset (and
+    /// that asset to exactly one holding) and aren't linked yet. Suggestions only.
+    static func holdingCandidates(holdings: [Holding], assets: Set<String>, links: [BinanceLink]) -> [(holding: Holding, asset: String)] {
+        classify(holdings: holdings, assets: assets, links: links).unique
+    }
+
+    /// Unlinked crypto holdings with conflicting identifiers or that share an asset with
+    /// another holding. Never suggested as a specific match — the user has to decide.
+    static func ambiguousHoldings(holdings: [Holding], assets: Set<String>, links: [BinanceLink]) -> [Holding] {
+        classify(holdings: holdings, assets: assets, links: links).ambiguous
+    }
+
+    private static func classify(holdings: [Holding], assets: Set<String>, links: [BinanceLink])
+        -> (unique: [(holding: Holding, asset: String)], ambiguous: [Holding]) {
+        let linked = Set(links.filter { $0.kind == .holding }.map(\.localID))
+        let upperAssets = Dictionary(assets.map { ($0.uppercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        let matches = holdings.filter { $0.assetClass == .crypto && !linked.contains($0.id) }.map { holding in
+            let ids = tickers(of: holding)
+            return (holding, ids, ids.compactMap { upperAssets[$0] })
+        }
+        var claims: [String: Int] = [:]
+        for (_, _, found) in matches { for asset in found { claims[asset, default: 0] += 1 } }
+        var unique: [(holding: Holding, asset: String)] = []
+        var ambiguous: [Holding] = []
+        for (holding, ids, found) in matches where !found.isEmpty {
+            if ids.count == 1, found.count == 1, let asset = found.first, claims[asset] == 1 {
+                unique.append((holding, asset))
+            } else {
+                ambiguous.append(holding)
+            }
+        }
+        return (unique, ambiguous)
     }
 
     /// Manual accounts that appear to hold the same Binance balance.
@@ -304,7 +341,9 @@ enum BinanceMatching {
 @MainActor
 @Observable
 final class BinanceService {
-    private(set) var isConnected: Bool
+    private(set) var isConnected = false
+    /// Half of a key/secret pair left behind by an earlier failed deletion; Disconnect removes it.
+    private(set) var hasLeftoverCredential = false
     private(set) var isSyncing = false
     private(set) var lastError: BinanceError?
     private(set) var lastFailureAt: Date?
@@ -345,14 +384,29 @@ final class BinanceService {
     }
 
     init(http: HTTPClient = BinanceTransport(),
-         secrets: SecretStore = KeychainStore(service: "WealthOS.Binance"),
+         secrets: SecretStore = KeychainStore(service: "WealthOS.Binance", accessibility: .whenUnlocked),
          defaults: UserDefaults = .standard,
          sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.http = http
         self.secrets = secrets
         self.defaults = defaults
         self.sleep = sleep
-        isConnected = secrets.read(Self.keyAccount) != nil && secrets.read(Self.secretAccount) != nil
+        reloadConnectionState()
+    }
+
+    /// Re-reads the Keychain (and moves older items to the "when unlocked" class). Call when the
+    /// app becomes active: the credentials are readable only while the device is unlocked, so a
+    /// launch while locked sees nothing. Never deletes anything — unreadable isn't proof of absence.
+    func reloadConnectionState() {
+        for account in [Self.keyAccount, Self.secretAccount] { secrets.upgradeProtection(account) }
+        refreshCredentialFlags()
+    }
+
+    private func refreshCredentialFlags() {
+        let hasKey = secrets.read(Self.keyAccount) != nil
+        let hasSecret = secrets.read(Self.secretAccount) != nil
+        isConnected = hasKey && hasSecret
+        hasLeftoverCredential = hasKey != hasSecret
     }
 
     var needsReconnect: Bool {
@@ -378,10 +432,18 @@ final class BinanceService {
         do {
             let download = try await run(makeClient(credentials), context: context, now: now)
             guard started == generation else { throw CancellationError() }
-            try store(credentials)
+            // All-or-nothing: the new key is only kept if the first snapshot is saved too.
+            let previous = storedCredentials()
+            try store(credentials, restoringOnFailure: previous)
+            do {
+                try save(download, now: now, context: context)
+            } catch {
+                restoreCredentials(previous)
+                throw error
+            }
             isConnected = true
+            hasLeftoverCredential = false
             lastAttemptAt = now
-            try save(download, now: now, context: context)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -426,13 +488,19 @@ final class BinanceService {
 
     /// Cancels any running sync and deletes the stored credentials. `removeData` also deletes
     /// the cached Binance snapshot and links; manual records are never touched.
+    ///
+    /// Throws `.credentialStorage` — and keeps reporting whatever is still stored — if the
+    /// Keychain refuses to delete either value; it never claims a disconnect that didn't happen.
     func disconnect(removeData: Bool, context: ModelContext) throws {
         generation += 1
         inFlight?.cancel()
         inFlight = nil
-        try? secrets.delete(Self.keyAccount)
-        try? secrets.delete(Self.secretAccount)
-        isConnected = false
+        var deletionFailed = false
+        for account in [Self.keyAccount, Self.secretAccount] {
+            do { try secrets.delete(account) } catch { deletionFailed = true }
+        }
+        refreshCredentialFlags()
+        guard !deletionFailed else { throw BinanceError.credentialStorage }
         lastError = nil
         lastFailureAt = nil
         automaticRetryAfter = nil
@@ -532,8 +600,11 @@ final class BinanceService {
         return BinancePricing.eurPrices(for: assets, pairs: pairs, tickers: tickers)
     }
 
+    /// Injectable for tests (e.g. a failing disk); always `context.save()` in the app.
+    var saveContext: (ModelContext) throws -> Void = { try $0.save() }
+
     private func save(_ download: Download, now: Date, context: ModelContext) throws {
-        try Persistence.commit(context) { try BinanceReconciler.apply(download.input, now: now, in: context) }
+        try Persistence.commit(context, save: saveContext) { try BinanceReconciler.apply(download.input, now: now, in: context) }
         lastError = nil
         lastFailureAt = nil
         warnings = download.warnings
@@ -543,7 +614,8 @@ final class BinanceService {
 
     /// Records the failure; the cached snapshot is left exactly as it was.
     private func record(_ error: Error, now: Date) {
-        let mapped = (error as? BinanceError) ?? (error is PersistenceError ? .invalidResponse : .network)
+        let mapped: BinanceError = (error as? BinanceError)
+            ?? (error is PersistenceError ? .localSaveFailed : error is KeychainError ? .credentialStorage : .network)
         lastError = mapped
         lastFailureAt = now
         automaticRetryAfter = now.addingTimeInterval(Self.automaticBackoff(after: mapped))
@@ -559,15 +631,27 @@ final class BinanceService {
         }
     }
 
-    private func store(_ credentials: BinanceCredentials) throws {
+    /// Writes both values; on failure puts `previous` back (or removes both), so the Keychain
+    /// never keeps a mismatched key/secret pair and a failed reconnect doesn't lose a working key.
+    private func store(_ credentials: BinanceCredentials, restoringOnFailure previous: BinanceCredentials?) throws {
         do {
             try secrets.save(credentials.apiKey, account: Self.keyAccount)
             try secrets.save(credentials.secretKey, account: Self.secretAccount)
         } catch {
+            restoreCredentials(previous)
+            throw BinanceError.credentialStorage
+        }
+    }
+
+    private func restoreCredentials(_ previous: BinanceCredentials?) {
+        if let previous {
+            try? secrets.save(previous.apiKey, account: Self.keyAccount)
+            try? secrets.save(previous.secretKey, account: Self.secretAccount)
+        } else {
             try? secrets.delete(Self.keyAccount)
             try? secrets.delete(Self.secretAccount)
-            throw error
         }
+        refreshCredentialFlags()
     }
 
     private func storedCredentials() -> BinanceCredentials? {

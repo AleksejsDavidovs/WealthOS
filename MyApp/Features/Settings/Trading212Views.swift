@@ -37,7 +37,7 @@ struct Trading212SettingsView: View {
                     if !service.isConnected { cachedSection(snapshot) }
                     duplicatesSection
                 }
-                if service.isConnected { disconnectSection }
+                if service.isConnected || service.hasLeftoverCredential { disconnectSection }
             }
             aboutSection
         }
@@ -139,6 +139,7 @@ struct Trading212SettingsView: View {
         let suggestedHoldings = Dictionary(Trading212Matching.holdingCandidates(holdings: holdings, positions: positions, links: links)
             .map { ($0.holding.id, $0.position.displaySymbol) }, uniquingKeysWith: { a, _ in a })
         let suggestedAccounts = Set(Trading212Matching.accountCandidates(accounts: accounts, links: links).map(\.id))
+        let ambiguousHoldings = Set(Trading212Matching.ambiguousHoldings(holdings: holdings, positions: positions, links: links).map(\.id))
         let shownHoldings = holdings.filter { $0.assetClass != .crypto }
         let shownAccounts = accounts.filter { !$0.kind.isLiability && !$0.isArchived || linked.contains($0.id) }
         if !shownHoldings.isEmpty || !shownAccounts.isEmpty {
@@ -149,7 +150,8 @@ struct Trading212SettingsView: View {
                 }
                 ForEach(shownHoldings) { holding in
                     linkToggle(title: holding.symbol.isEmpty ? holding.name : holding.symbol,
-                               detail: suggestedHoldings[holding.id].map { "Looks like \($0) at Trading 212" },
+                               detail: suggestedHoldings[holding.id].map { "Looks like \($0) at Trading 212" }
+                                   ?? (ambiguousHoldings.contains(holding.id) ? "Resembles several Trading 212 positions — check before linking" : nil),
                                isOn: linked.contains(holding.id), kind: .holding, id: holding.id)
                 }
             } header: {
@@ -281,6 +283,10 @@ struct Trading212PortfolioCard: View {
                 TimelineView(.everyMinute) { _ in
                     Text(service.isSyncing ? "Syncing…" : "Synced \(snapshot.syncedAt.relativeDescription)")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if snapshot.restoredFromBackup {
+                    Text("Restored from backup — not re-synced yet, values may be outdated")
+                        .font(.caption).foregroundStyle(Theme.warning).lineLimit(2)
                 }
                 if let error = service.lastError {
                     Text(error.errorDescription ?? "Sync failed.")

@@ -570,6 +570,7 @@ struct BinanceServiceTests {
         #expect(engine.binanceUnpriced.map(\.asset).sorted() == ["LDUSDT", "XYZ"])
         // Spot only: ETH 0.59118264 × 3000 + BTC 7.407 + USDT 80 + LDO 20
         #expect(engine.binanceTotalBase == dec("1880.95492"))
+        #expect(engine.summary.incompleteSources.contains("Binance"))   // Earn unknown ≠ zero
     }
 
     @Test func temporaryEarnFailureKeepsPreviousPositions() async throws {
@@ -581,10 +582,103 @@ struct BinanceServiceTests {
         #expect(await service.sync(context: context, force: true, now: now.addingTimeInterval(60)))
         #expect(snapshot?.lockedStatus == .failed)
         #expect(snapshot?.lockedSyncedAt == now)
-        #expect(asset("ETH")?.earnQuantity == dec("0.35"))     // locked 0.25 kept, not dropped to zero
-        #expect(engine.binanceTotalBase == Self.expectedTotal)
+        // Locked 0.25 ETH is kept and shown as last known, but not counted (AUD-001).
+        let eth = try #require(asset("ETH"))
+        #expect(eth.earnQuantity == dec("0.1") && eth.unconfirmedQuantity == dec("0.25"))
+        #expect(eth.unconfirmedValueEUR == 750)
+        #expect(rowCount == 8)                                   // nothing deleted
+        #expect(engine.binanceTotalBase == Self.expectedTotal - 750)
+        #expect(engine.summary.incompleteSources == ["Binance"])
+        #expect(!engine.binanceIncompleteReasons.isEmpty)
         #expect(!service.warnings.isEmpty)
         #expect(service.automaticRetryAfter != nil)
+        // The next successful sync confirms everything again.
+        http.handler = { endpoint, _ in BinanceFixtures.reply(endpoint) }
+        #expect(await service.sync(context: context, force: true, now: now.addingTimeInterval(600)))
+        #expect(engine.binanceTotalBase == Self.expectedTotal)
+        #expect(engine.summary.incompleteSources.isEmpty)
+    }
+
+    // MARK: AUD-001 — partial snapshots must never double count
+
+    func syncSecond(account: String, flexible: BinanceMockHTTP.Reply, locked: BinanceMockHTTP.Reply,
+                    service: BinanceService, at offset: TimeInterval = 60) async -> Bool {
+        http.handler = { endpoint, _ in
+            switch endpoint {
+            case .account: (200, account, [:])
+            case .flexiblePositions: flexible
+            case .lockedPositions: locked
+            default: BinanceFixtures.reply(endpoint)
+            }
+        }
+        return await service.sync(context: context, force: true, now: now.addingTimeInterval(offset))
+    }
+
+    @Test func lockedRedemptionDuringLockedOutageIsCountedOnce() async throws {
+        let service = makeService()
+        #expect(await service.sync(context: context, force: true, now: now))
+        // 0.25 ETH left Locked Earn and is now in Spot (0.84118264); Locked Earn can't be read.
+        #expect(await syncSecond(account: BinanceFixtures.account(eth: "0.75000000", locked: "0.09118264"),
+                                 flexible: (200, BinanceFixtures.flexible, [:]), locked: (503, "", [:]), service: service))
+        let eth = try #require(asset("ETH"))
+        #expect(eth.quantity == dec("0.94118264"))              // true ownership, not 1.19118264
+        #expect(eth.valueEUR == dec("2823.54792"))
+        #expect(eth.unconfirmedQuantity == dec("0.25"))
+        #expect(engine.summary.incompleteSources.contains("Binance"))
+    }
+
+    @Test func flexibleRedemptionDuringFlexibleOutageIsCountedOnce() async throws {
+        let service = makeService()
+        #expect(await service.sync(context: context, force: true, now: now))
+        // Redeemed 50 USDT to Spot (150, no more LDUSDT); Flexible Earn times out.
+        let account = #"{"accountType":"SPOT","balances":[{"asset":"USDT","free":"150.00000000","locked":"0.00000000"}],"uid":354937868}"#
+        #expect(await syncSecond(account: account, flexible: (503, "", [:]), locked: (200, BinanceFixtures.emptyPage, [:]), service: service))
+        let usdt = try #require(asset("USDT"))
+        #expect(usdt.quantity == 150 && usdt.valueEUR == 120)   // not 200 USDT
+        #expect(usdt.unconfirmedQuantity == 50)
+        #expect(snapshot?.flexibleStatus == .failed)
+    }
+
+    @Test func ldSpotRowIsNotMatchedAgainstStaleFlexibleData() async throws {
+        let service = makeService()
+        #expect(await service.sync(context: context, force: true, now: now))
+        // Spot still reports LDUSDT, Flexible fails: neither copy is counted, nothing is dropped silently.
+        let account = #"{"accountType":"SPOT","balances":[{"asset":"USDT","free":"100.00000000","locked":"0.00000000"},{"asset":"LDUSDT","free":"50.00000000","locked":"0.00000000"}],"uid":354937868}"#
+        #expect(await syncSecond(account: account, flexible: (503, "", [:]), locked: (200, BinanceFixtures.emptyPage, [:]), service: service))
+        #expect(asset("USDT")?.quantity == 100 && asset("USDT")?.unconfirmedQuantity == 50)
+        #expect(asset("LDUSDT")?.quantity == 50 && asset("LDUSDT")?.valueBase == nil)
+        #expect(snapshot?.mergedSpotAssets == "")
+        #expect(engine.binanceTotalBase == 80)
+        #expect(engine.summary.incompleteSources.contains("Binance"))
+    }
+
+    @Test func revokedEarnPermissionMarksKeptPositionsUnconfirmed() async throws {
+        let service = makeService()
+        #expect(await service.sync(context: context, force: true, now: now))
+        let denied: BinanceMockHTTP.Reply = (401, #"{"code":-2015,"msg":"Invalid API-key, IP, or permissions for action."}"#, [:])
+        #expect(await syncSecond(account: BinanceFixtures.account, flexible: denied, locked: denied, service: service))
+        #expect(snapshot?.flexibleStatus == .unavailable && snapshot?.lockedStatus == .unavailable)
+        #expect(asset("ETH")?.earnQuantity == 0 && asset("ETH")?.unconfirmedQuantity == dec("0.35"))
+        #expect(engine.summary.incompleteSources.contains("Binance"))
+        #expect(engine.binanceTotalBase == dec("1880.95492"))   // confirmed Spot only
+    }
+
+    @Test func depositDuringEarnOutageIsCounted() async throws {
+        let service = makeService()
+        #expect(await service.sync(context: context, force: true, now: now))
+        let before = try #require(asset("ETH")).quantity
+        #expect(await syncSecond(account: BinanceFixtures.account(eth: "1.50000000", locked: "0.09118264"),
+                                 flexible: (200, BinanceFixtures.flexible, [:]), locked: (503, "", [:]), service: service))
+        // Spot rose by 1 ETH (deposit); only the unrefreshed Locked 0.25 is withheld.
+        #expect(try #require(asset("ETH")).quantity == before + 1 - dec("0.25"))
+    }
+
+    @Test func successfulSyncIsCompleteAndCountsSpotAndEarn() async throws {
+        #expect(await makeService().sync(context: context, force: true, now: now))
+        #expect(engine.summary.incompleteSources.isEmpty)
+        #expect(engine.binanceIncompleteReasons.isEmpty)
+        #expect(engine.binanceAssets.allSatisfy { $0.unconfirmedQuantity == 0 })
+        #expect(engine.binanceSpotBase + engine.binanceEarnBase == Self.expectedTotal)
     }
 
     @Test func accountFailureChangesNothing() async throws {
