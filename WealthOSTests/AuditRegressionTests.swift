@@ -14,18 +14,38 @@ final class FlakySecrets: SecretStore, @unchecked Sendable {
     var values: [String: String] = [:]
     var failSave: Set<String> = []
     var failDelete: Set<String> = []
+    /// Accounts whose lookups report a locked device / an operational Keychain error.
+    var locked: Set<String> = []
+    var failLookup: Set<String> = []
+    var failUpgrade: Set<String> = []
+    /// Fails every save/delete after this many successful mutations (nil = never).
+    var mutationsBeforeFailure: Int?
     private(set) var upgraded: [String] = []
 
-    func read(_ account: String) -> String? { values[account] }
+    func lookup(_ account: String) -> SecretLookup {
+        if locked.contains(account) { return .locked }
+        if failLookup.contains(account) { return .failure(-25_291) }
+        return values[account].map { .found($0) } ?? .notFound
+    }
+    private func mutate() throws {
+        guard let remaining = mutationsBeforeFailure else { return }
+        if remaining <= 0 { throw KeychainError.status(-25_291) }
+        mutationsBeforeFailure = remaining - 1
+    }
     func save(_ value: String, account: String) throws {
         if failSave.contains(account) { throw KeychainError.status(-25_291) }
+        try mutate()
         values[account] = value
     }
     func delete(_ account: String) throws {
         if failDelete.contains(account) { throw KeychainError.status(-25_291) }
+        try mutate()
         values[account] = nil
     }
-    func upgradeProtection(_ account: String) { upgraded.append(account) }
+    func upgradeProtection(_ account: String) -> ProtectionUpgrade {
+        upgraded.append(account)
+        return failUpgrade.contains(account) ? .failed(-25_291) : .alreadyCurrent
+    }
 }
 
 // MARK: - AUD-004 / AUD-005 / AUD-007: credential lifecycle

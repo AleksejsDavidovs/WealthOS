@@ -249,13 +249,25 @@ enum RecurringService {
 }
 
 enum SnapshotService {
+    enum AutomaticSnapshotOutcome: Equatable {
+        case recorded, unchanged, noData
+        /// Totals were incomplete or unverified (missing FX rate, unreadable Earn product,
+        /// invalid trade history, restored provider data…). Nothing was written, and an
+        /// earlier complete snapshot of the day was kept.
+        case skippedIncomplete
+    }
+
     /// Records (or refreshes) today's automatic snapshot from actual current balances.
-    /// Never back-fills past dates: history only contains values that really existed.
+    /// Never back-fills past dates: history only contains values that really existed — and only
+    /// confirmed ones: a lower-bound or last-known total is never saved as ordinary history.
+    @discardableResult
     static func recordAutomaticSnapshot(summary: NetWorthSummary, currencyCode: String, hasData: Bool,
-                                        in context: ModelContext, now: Date = .now, calendar: Calendar = .current) {
-        guard hasData else { return }
+                                        in context: ModelContext, now: Date = .now,
+                                        calendar: Calendar = .current) -> AutomaticSnapshotOutcome {
+        guard hasData else { return .noData }
+        guard summary.isComplete else { return .skippedIncomplete }
         let start = calendar.startOfDay(for: now)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return }
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return .unchanged }
         let automatic = SnapshotSource.automatic.rawValue
         let descriptor = FetchDescriptor<NetWorthSnapshot>(predicate: #Predicate {
             $0.date >= start && $0.date < end && $0.sourceRaw == automatic
@@ -263,7 +275,7 @@ enum SnapshotService {
         let existing = (try? context.fetch(descriptor)) ?? []
         if let snapshot = existing.first, snapshot.currencyCode == currencyCode {
             guard snapshot.netWorth != summary.netWorth || snapshot.investmentTotal != summary.investments
-                    || snapshot.liquidTotal != summary.liquid || snapshot.liabilitiesTotal != summary.liabilities else { return }
+                    || snapshot.liquidTotal != summary.liquid || snapshot.liabilitiesTotal != summary.liabilities else { return .unchanged }
             snapshot.date = now
             snapshot.netWorth = summary.netWorth
             snapshot.liquidTotal = summary.liquid
@@ -278,5 +290,6 @@ enum SnapshotService {
                                             currencyCode: currencyCode))
         }
         try? context.save()
+        return .recorded
     }
 }

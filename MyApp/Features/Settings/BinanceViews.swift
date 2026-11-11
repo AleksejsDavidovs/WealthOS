@@ -30,13 +30,15 @@ struct BinanceSettingsView: View {
                           systemImage: "theatermasks.fill")
                 }
             } else {
+                CredentialStateSection(state: service.credentialState, protectionUpgradeFailed: service.protectionUpgradeFailed,
+                                       retry: { service.reloadConnectionState() })
                 if service.isConnected { statusSection }
                 if !service.isConnected || service.needsReconnect { connectSection }
                 if let snapshot = snapshots.first {
                     if !service.isConnected { cachedSection(snapshot) }
                     duplicatesSection
                 }
-                if service.isConnected || service.hasLeftoverCredential { disconnectSection }
+                if service.isConnected || service.hasLeftoverCredential || service.credentialState == .uncertain { disconnectSection }
             }
             aboutSection
         }

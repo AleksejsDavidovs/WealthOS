@@ -177,7 +177,7 @@ enum Trading212Matching {
     }
 
     /// "GBX" (pence) and "GBP" quote the same London listing.
-    static func listingCurrency(_ code: String) -> String {
+    nonisolated static func listingCurrency(_ code: String) -> String {
         let upper = code.trimmingCharacters(in: .whitespaces).uppercased()
         return upper == "GBX" ? "GBP" : upper
     }
@@ -246,7 +246,15 @@ enum Trading212Matching {
 @MainActor
 @Observable
 final class Trading212Service {
-    private(set) var isConnected = false
+    /// What is known about the stored key/secret pair; see `CredentialState`.
+    private(set) var credentialState: CredentialState = .missing
+    /// Connected only with a complete, verified pair — never while locked, failing or uncertain.
+    var isConnected: Bool { credentialState == .stored }
+    /// Half of a key/secret pair left behind by an earlier failed deletion; Disconnect removes it.
+    var hasLeftoverCredential: Bool { credentialState == .partial }
+    /// Moving the stored items to the "when unlocked" class failed; they keep working and the
+    /// migration is retried on the next activation.
+    private(set) var protectionUpgradeFailed = false
     private(set) var isSyncing = false
     private(set) var lastError: Trading212Error?
     private(set) var lastFailureAt: Date?
@@ -295,18 +303,17 @@ final class Trading212Service {
         reloadConnectionState()
     }
 
-    /// Half of a key/secret pair left behind by an earlier failed deletion; Disconnect removes it.
-    private(set) var hasLeftoverCredential = false
+    private var keychainPair: CredentialPair {
+        CredentialPair(secrets: secrets, keyAccount: Self.keyAccount, secretAccount: Self.secretAccount,
+                       defaults: defaults, journalKey: "credentialWriteInProgress.trading212")
+    }
 
     /// Re-reads the Keychain (and moves older items to the "when unlocked" class). Call when the
     /// app becomes active: the credentials are readable only while the device is unlocked, so a
-    /// launch while locked sees nothing. Never deletes anything — unreadable isn't proof of absence.
+    /// launch while locked reports `.locked`. Never deletes anything.
     func reloadConnectionState() {
-        for account in [Self.keyAccount, Self.secretAccount] { secrets.upgradeProtection(account) }
-        let hasKey = secrets.read(Self.keyAccount) != nil
-        let hasSecret = secrets.read(Self.secretAccount) != nil
-        isConnected = hasKey && hasSecret
-        hasLeftoverCredential = hasKey != hasSecret
+        protectionUpgradeFailed = !keychainPair.upgradeProtection()
+        credentialState = keychainPair.state()
     }
 
     var needsReconnect: Bool { lastError == .invalidCredentials || lastError == .missingPermission }
@@ -321,6 +328,9 @@ final class Trading212Service {
         let credentials = Trading212Credentials(apiKey: apiKey, apiSecret: apiSecret)
         guard credentials.isComplete else { throw Trading212Error.missingCredentials }
         guard !isSyncing else { throw Trading212Error.busy }
+        // Can't know what's stored, so a failed write couldn't be rolled back safely.
+        reloadConnectionState()
+        guard credentialState != .locked, credentialState != .unavailable else { throw Trading212Error.keychainUnavailable }
         isSyncing = true
         defer { isSyncing = false }
 
@@ -330,18 +340,26 @@ final class Trading212Service {
             let snapshot = try await download(client: client, forceInstruments: true)
             guard started == generation else { throw CancellationError() }
             // All-or-nothing: the new key is only kept if the first snapshot is saved too.
-            let previous = storedCredentials()
-            try store(credentials, restoringOnFailure: previous)
+            // An uncertain pair is never "restored": the rollback target is then "nothing stored".
+            let previous = keychainPair.values()
+            let outcome = keychainPair.replace(with: (credentials.apiKey, credentials.apiSecret), previous: previous)
+            credentialState = keychainPair.state()
+            switch outcome {
+            case .written: break
+            case .rolledBack: throw Trading212Error.credentialStorage
+            case .uncertain: throw Trading212Error.credentialStateUncertain
+            }
             do {
                 try save(snapshot, environment: environment, now: now, context: context)
             } catch {
-                restoreCredentials(previous)
+                let restored = keychainPair.restore(previous)
+                credentialState = keychainPair.state()
+                if !restored { throw Trading212Error.credentialStateUncertain }
                 throw error
             }
             self.environment = environment
             defaults.set(environment.rawValue, forKey: Self.environmentKey)
-            isConnected = true
-            hasLeftoverCredential = false
+            credentialState = keychainPair.state()
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -387,19 +405,15 @@ final class Trading212Service {
 
     /// Deletes the stored credentials. `removeData` also deletes the cached Trading 212
     /// snapshot and duplicate links; manual holdings, accounts and transactions are never touched.
-    /// Throws `.credentialStorage` — and keeps reporting whatever is still stored — if the
-    /// Keychain refuses to delete either value; it never claims a disconnect that didn't happen.
+    /// Succeeds only when both values are verifiably gone. Otherwise throws — and keeps
+    /// reporting whatever is known to be stored; it never claims a disconnect that didn't happen.
     func disconnect(removeData: Bool, context: ModelContext) throws {
         generation += 1
-        var deletionFailed = false
-        for account in [Self.keyAccount, Self.secretAccount] {
-            do { try secrets.delete(account) } catch { deletionFailed = true }
+        let deleted = keychainPair.delete()
+        credentialState = keychainPair.state()
+        guard deleted else {
+            throw credentialState == .uncertain ? Trading212Error.credentialStateUncertain : Trading212Error.credentialStorage
         }
-        let hasKey = secrets.read(Self.keyAccount) != nil
-        let hasSecret = secrets.read(Self.secretAccount) != nil
-        isConnected = hasKey && hasSecret
-        hasLeftoverCredential = hasKey != hasSecret
-        guard !deletionFailed else { throw Trading212Error.credentialStorage }
         lastError = nil
         lastFailureAt = nil
         automaticRetryAfter = nil
@@ -475,35 +489,10 @@ final class Trading212Service {
         }
     }
 
-    /// Writes both values; on failure puts `previous` back (or removes both), so the Keychain
-    /// never keeps a mismatched key/secret pair and a failed reconnect doesn't lose a working key.
-    private func store(_ credentials: Trading212Credentials, restoringOnFailure previous: Trading212Credentials?) throws {
-        do {
-            try secrets.save(credentials.apiKey, account: Self.keyAccount)
-            try secrets.save(credentials.apiSecret, account: Self.secretAccount)
-        } catch {
-            restoreCredentials(previous)
-            throw Trading212Error.credentialStorage
-        }
-    }
-
-    private func restoreCredentials(_ previous: Trading212Credentials?) {
-        if let previous {
-            try? secrets.save(previous.apiKey, account: Self.keyAccount)
-            try? secrets.save(previous.apiSecret, account: Self.secretAccount)
-        } else {
-            try? secrets.delete(Self.keyAccount)
-            try? secrets.delete(Self.secretAccount)
-        }
-        let hasKey = secrets.read(Self.keyAccount) != nil
-        let hasSecret = secrets.read(Self.secretAccount) != nil
-        isConnected = hasKey && hasSecret
-        hasLeftoverCredential = hasKey != hasSecret
-    }
-
+    /// The verified pair, or nil when missing, partial, locked, failing or uncertain.
     private func storedCredentials() -> Trading212Credentials? {
-        guard let key = secrets.read(Self.keyAccount), let secret = secrets.read(Self.secretAccount) else { return nil }
-        let credentials = Trading212Credentials(apiKey: key, apiSecret: secret)
+        guard let values = keychainPair.values() else { return nil }
+        let credentials = Trading212Credentials(apiKey: values.key, apiSecret: values.secret)
         return credentials.isComplete ? credentials : nil
     }
 
@@ -525,7 +514,7 @@ nonisolated struct DisabledHTTPClient: HTTPClient {
 
 /// Used in test hosts and previews: never reads or writes the real Keychain.
 nonisolated struct NoSecretStore: SecretStore {
-    func read(_ account: String) -> String? { nil }
+    func lookup(_ account: String) -> SecretLookup { .notFound }
     func save(_ value: String, account: String) throws { throw KeychainError.status(errSecNotAvailable) }
     func delete(_ account: String) throws {}
 }

@@ -32,7 +32,7 @@ final class MockBiometricAuthenticator: BiometricAuthenticating, @unchecked Send
 final class FailingSecrets: SecretStore, @unchecked Sendable {
     var values: [String: String] = [:]
     var failingAccount: String?
-    func read(_ account: String) -> String? { values[account] }
+    func lookup(_ account: String) -> SecretLookup { values[account].map { .found($0) } ?? .notFound }
     func save(_ value: String, account: String) throws {
         if account == failingAccount { throw KeychainError.status(errSecIO) }
         values[account] = value

@@ -17,6 +17,22 @@ nonisolated struct NetWorthSummary: Equatable, Sendable {
     /// so the totals are a confirmed lower bound — never a possibly duplicated amount.
     var incompleteSources: Set<String> = []
 
+    /// Every value is counted and confirmed: no missing exchange rate and no incomplete or
+    /// unverified source. Otherwise the totals are a lower bound (or last-known data).
+    var isComplete: Bool { missingRateCurrencies.isEmpty && incompleteSources.isEmpty }
+
+    /// Human-readable reasons the totals aren't fully confirmed; empty when complete.
+    var completenessIssues: [String] {
+        var issues: [String] = []
+        if !missingRateCurrencies.isEmpty {
+            issues.append("No exchange rate for \(missingRateCurrencies.sorted().joined(separator: ", ")), so those amounts are left out")
+        }
+        if !incompleteSources.isEmpty {
+            issues.append("\(incompleteSources.sorted().joined(separator: ", ")) couldn't be fully confirmed")
+        }
+        return issues
+    }
+
     var investments: Decimal { investmentAccounts + holdingsValue }
     var totalAssets: Decimal { liquid + investments + otherAssets }
     var netWorth: Decimal { totalAssets - liabilities }

@@ -28,6 +28,9 @@ nonisolated enum PINVerificationResult: Equatable {
     /// Settings, which requires Face ID / device passcode. Financial data is never touched.
     case disabled
     case notEnrolled
+    /// The PIN or its attempt counter couldn't be read (device locked, Keychain error or a
+    /// corrupt record). Nothing was checked or counted; use Face ID or the device passcode.
+    case unavailable
 }
 
 /// Stores and verifies a six-digit app PIN without ever persisting it in plaintext.
@@ -62,7 +65,7 @@ nonisolated final class AppPINManager: @unchecked Sendable {
     }
 
     var isEnrolled: Bool { loadVerifier() != nil }
-    var isDisabledByFailures: Bool { loadState().failedAttempts >= Self.maxTotalFailures }
+    var isDisabledByFailures: Bool { (loadState()?.failedAttempts ?? 0) >= Self.maxTotalFailures }
     var isUsable: Bool { isEnrolled && !isDisabledByFailures }
 
     static func isValidFormat(_ pin: String) -> Bool {
@@ -101,8 +104,14 @@ nonisolated final class AppPINManager: @unchecked Sendable {
     }
 
     func verify(_ candidate: String, now: Date = .now) -> PINVerificationResult {
-        guard let verifier = loadVerifier() else { return .notEnrolled }
-        let state = loadState()
+        // Fail closed: an unreadable verifier or attempt counter (device locked, Keychain error,
+        // corrupt record) is never treated as "no PIN" or "no failed attempts".
+        switch store.lookup(verifierAccount) {
+        case .notFound: return .notEnrolled
+        case .locked, .failure: return .unavailable
+        case .found: break
+        }
+        guard let verifier = loadVerifier(), let state = loadState() else { return .unavailable }
         guard state.failedAttempts < Self.maxTotalFailures else { return .disabled }
 
         let nowSeconds = now.timeIntervalSince1970
@@ -136,7 +145,7 @@ nonisolated final class AppPINManager: @unchecked Sendable {
 
     /// Seconds until the next attempt is allowed, or nil. Reads state only; never an attempt.
     func lockoutRemaining(now: Date = .now) -> TimeInterval? {
-        let state = loadState()
+        guard let state = loadState() else { return nil }
         let remaining = state.lockedUntil - now.timeIntervalSince1970
         guard remaining > 0 else { return nil }
         return min(remaining, Self.lockoutDuration(forFailedAttempts: state.failedAttempts))
@@ -163,10 +172,16 @@ nonisolated final class AppPINManager: @unchecked Sendable {
         return (Data(data.prefix(saltLength)), Data(data.suffix(hashLength)))
     }
 
-    private func loadState() -> AttemptState {
-        guard let raw = store.read(stateAccount), let data = Data(base64Encoded: raw),
-              let state = try? JSONDecoder().decode(AttemptState.self, from: data) else { return AttemptState() }
-        return state
+    /// nil when the counter exists but can't be read or decoded. Only a counter that genuinely
+    /// doesn't exist starts fresh — a Keychain error must never reset the brute-force limit.
+    private func loadState() -> AttemptState? {
+        switch store.lookup(stateAccount) {
+        case .notFound: return AttemptState()
+        case .locked, .failure: return nil
+        case .found(let raw):
+            guard let data = Data(base64Encoded: raw) else { return nil }
+            return try? JSONDecoder().decode(AttemptState.self, from: data)
+        }
     }
 
     private func saveState(_ state: AttemptState) -> Bool {

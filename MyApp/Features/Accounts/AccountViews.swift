@@ -10,8 +10,11 @@ struct AccountsListView: View {
         FinanceReader { engine in
             List {
                 Section {
-                    LabeledContent("Net Worth") {
+                    LabeledContent(engine.summary.isComplete ? "Net Worth" : "Net Worth (confirmed part)") {
                         MoneyText(amount: engine.summary.netWorth, code: baseCurrency).font(.headline)
+                    }
+                    if !engine.summary.isComplete {
+                        ValuationCompletenessBanner(summary: engine.summary, subject: "net worth")
                     }
                 } footer: {
                     Text("Net worth = all account balances (debts count negative) + tracked holdings at their manually entered prices.")

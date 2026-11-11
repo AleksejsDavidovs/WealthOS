@@ -66,6 +66,8 @@ nonisolated enum BinanceError: LocalizedError, Equatable, Sendable {
     case blockedRequest
     case busy
     case credentialStorage
+    case credentialStateUncertain
+    case keychainUnavailable
     case localSaveFailed
 
     /// Never includes credentials, signatures or response bodies.
@@ -92,6 +94,8 @@ nonisolated enum BinanceError: LocalizedError, Equatable, Sendable {
         case .blockedRequest: "Blocked a request that wasn't a read-only call to Binance."
         case .busy: "A Binance sync is already running."
         case .credentialStorage: "The iOS Keychain didn't accept the change, so the previous Binance connection state was kept. Try again."
+        case .credentialStateUncertain: "After a Keychain error WealthOS can't confirm which Binance key is stored, so syncing is paused. Disconnect, then connect again."
+        case .keychainUnavailable: "The Keychain isn't available right now (the iPhone may be locked). Nothing was changed — try again."
         case .localSaveFailed: "WealthOS couldn't save the Binance data on this iPhone. Nothing was changed."
         }
     }

@@ -55,6 +55,8 @@ nonisolated enum Trading212Error: LocalizedError, Equatable, Sendable {
     case blockedRequest
     case busy
     case credentialStorage
+    case credentialStateUncertain
+    case keychainUnavailable
     case localSaveFailed
 
     /// Never includes credentials or response bodies.
@@ -74,6 +76,8 @@ nonisolated enum Trading212Error: LocalizedError, Equatable, Sendable {
         case .blockedRequest: "Blocked a request that wasn't a read-only call to Trading 212."
         case .busy: "A Trading 212 sync is already running."
         case .credentialStorage: "The iOS Keychain didn't accept the change, so the previous Trading 212 connection state was kept. Try again."
+        case .credentialStateUncertain: "After a Keychain error WealthOS can't confirm which Trading 212 key is stored, so syncing is paused. Disconnect, then connect again."
+        case .keychainUnavailable: "The Keychain isn't available right now (the iPhone may be locked). Nothing was changed — try again."
         case .localSaveFailed: "WealthOS couldn't save the Trading 212 data on this iPhone. Nothing was changed."
         }
     }

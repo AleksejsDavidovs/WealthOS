@@ -272,16 +272,36 @@ nonisolated struct RateLimitState: Codable, Equatable, Sendable {
 
 // MARK: - Secrets
 
+/// Outcome of reading one secret. Only `.notFound` means "there is no credential"; a locked
+/// device or a Keychain failure says nothing about whether one exists.
+nonisolated enum SecretLookup: Equatable, Sendable {
+    case found(String)
+    case notFound
+    /// Protected item, device locked (`errSecInteractionNotAllowed`): try again once unlocked.
+    case locked
+    case failure(OSStatus)
+
+    var value: String? { if case .found(let value) = self { value } else { nil } }
+}
+
+/// Outcome of moving an item to the store's current protection class.
+nonisolated enum ProtectionUpgrade: Equatable, Sendable {
+    case alreadyCurrent, upgraded, notFound, locked
+    case failed(OSStatus)
+}
+
 nonisolated protocol SecretStore: Sendable {
-    func read(_ account: String) -> String?
+    func lookup(_ account: String) -> SecretLookup
     func save(_ value: String, account: String) throws
     func delete(_ account: String) throws
     /// Moves an existing item to the store's current protection class, keeping its value.
-    func upgradeProtection(_ account: String)
+    func upgradeProtection(_ account: String) -> ProtectionUpgrade
 }
 
 nonisolated extension SecretStore {
-    func upgradeProtection(_ account: String) {}
+    /// The value, or nil for *any* non-found outcome. Use `lookup` when the reason matters.
+    func read(_ account: String) -> String? { lookup(account).value }
+    func upgradeProtection(_ account: String) -> ProtectionUpgrade { .alreadyCurrent }
 }
 
 /// Keychain protection classes WealthOS uses. Both are device-only (never synced or migrated
@@ -319,14 +339,22 @@ nonisolated struct KeychainStore: SecretStore {
          kSecAttrSynchronizable as String: false]
     }
 
-    func read(_ account: String) -> String? {
+    func lookup(_ account: String) -> SecretLookup {
         var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data, let value = String(data: data, encoding: .utf8), !value.isEmpty else { return nil }
-        return value
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data, let value = String(data: data, encoding: .utf8), !value.isEmpty else {
+                return .failure(errSecDecode)
+            }
+            return .found(value)
+        case errSecItemNotFound: return .notFound
+        case errSecInteractionNotAllowed: return .locked
+        default: return .failure(status)
+        }
     }
 
     func save(_ value: String, account: String) throws {
@@ -350,14 +378,26 @@ nonisolated struct KeychainStore: SecretStore {
     /// Changes only the protection attribute of an existing item; the secret itself is never
     /// read, rewritten or deleted. A no-op when the item is missing, unreadable (e.g. the device
     /// is locked) or already in the right class — so it can't lose a credential.
-    func upgradeProtection(_ account: String) {
+    func upgradeProtection(_ account: String) -> ProtectionUpgrade {
         var query = baseQuery(account)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let attributes = result as? [String: Any],
-              (attributes[kSecAttrAccessible as String] as? String) != (accessibility.value as String) else { return }
-        _ = SecItemUpdate(baseQuery(account) as CFDictionary, [kSecAttrAccessible as String: accessibility.value] as CFDictionary)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess: break
+        case errSecItemNotFound: return .notFound
+        case errSecInteractionNotAllowed: return .locked
+        default: return .failed(status)
+        }
+        guard let attributes = result as? [String: Any] else { return .failed(errSecDecode) }
+        if (attributes[kSecAttrAccessible as String] as? String) == (accessibility.value as String) { return .alreadyCurrent }
+        let update = SecItemUpdate(baseQuery(account) as CFDictionary,
+                                   [kSecAttrAccessible as String: accessibility.value] as CFDictionary)
+        switch update {
+        case errSecSuccess: return .upgraded
+        case errSecInteractionNotAllowed: return .locked
+        default: return .failed(update)
+        }
     }
 }

@@ -341,9 +341,15 @@ enum BinanceMatching {
 @MainActor
 @Observable
 final class BinanceService {
-    private(set) var isConnected = false
+    /// What is known about the stored key/secret pair; see `CredentialState`.
+    private(set) var credentialState: CredentialState = .missing
+    /// Connected only with a complete, verified pair — never while locked, failing or uncertain.
+    var isConnected: Bool { credentialState == .stored }
     /// Half of a key/secret pair left behind by an earlier failed deletion; Disconnect removes it.
-    private(set) var hasLeftoverCredential = false
+    var hasLeftoverCredential: Bool { credentialState == .partial }
+    /// Moving the stored items to the "when unlocked" class failed; they keep working and the
+    /// migration is retried on the next activation.
+    private(set) var protectionUpgradeFailed = false
     private(set) var isSyncing = false
     private(set) var lastError: BinanceError?
     private(set) var lastFailureAt: Date?
@@ -396,17 +402,15 @@ final class BinanceService {
 
     /// Re-reads the Keychain (and moves older items to the "when unlocked" class). Call when the
     /// app becomes active: the credentials are readable only while the device is unlocked, so a
-    /// launch while locked sees nothing. Never deletes anything — unreadable isn't proof of absence.
+    /// launch while locked reports `.locked`. Never deletes anything.
     func reloadConnectionState() {
-        for account in [Self.keyAccount, Self.secretAccount] { secrets.upgradeProtection(account) }
-        refreshCredentialFlags()
+        protectionUpgradeFailed = !keychainPair.upgradeProtection()
+        credentialState = keychainPair.state()
     }
 
-    private func refreshCredentialFlags() {
-        let hasKey = secrets.read(Self.keyAccount) != nil
-        let hasSecret = secrets.read(Self.secretAccount) != nil
-        isConnected = hasKey && hasSecret
-        hasLeftoverCredential = hasKey != hasSecret
+    private var keychainPair: CredentialPair {
+        CredentialPair(secrets: secrets, keyAccount: Self.keyAccount, secretAccount: Self.secretAccount,
+                       defaults: defaults, journalKey: "credentialWriteInProgress.binance")
     }
 
     var needsReconnect: Bool {
@@ -425,6 +429,9 @@ final class BinanceService {
         let credentials = BinanceCredentials(apiKey: apiKey, secretKey: secretKey)
         guard credentials.isComplete else { throw BinanceError.missingCredentials }
         guard !isSyncing else { throw BinanceError.busy }
+        // Can't know what's stored, so a failed write couldn't be rolled back safely.
+        reloadConnectionState()
+        guard credentialState != .locked, credentialState != .unavailable else { throw BinanceError.keychainUnavailable }
         isSyncing = true
         defer { isSyncing = false }
 
@@ -433,16 +440,24 @@ final class BinanceService {
             let download = try await run(makeClient(credentials), context: context, now: now)
             guard started == generation else { throw CancellationError() }
             // All-or-nothing: the new key is only kept if the first snapshot is saved too.
-            let previous = storedCredentials()
-            try store(credentials, restoringOnFailure: previous)
+            // An uncertain pair is never "restored": the rollback target is then "nothing stored".
+            let previous = keychainPair.values()
+            let outcome = keychainPair.replace(with: (credentials.apiKey, credentials.secretKey), previous: previous)
+            credentialState = keychainPair.state()
+            switch outcome {
+            case .written: break
+            case .rolledBack: throw BinanceError.credentialStorage
+            case .uncertain: throw BinanceError.credentialStateUncertain
+            }
             do {
                 try save(download, now: now, context: context)
             } catch {
-                restoreCredentials(previous)
+                let restored = keychainPair.restore(previous)
+                credentialState = keychainPair.state()
+                if !restored { throw BinanceError.credentialStateUncertain }
                 throw error
             }
-            isConnected = true
-            hasLeftoverCredential = false
+            credentialState = keychainPair.state()
             lastAttemptAt = now
         } catch is CancellationError {
             throw CancellationError()
@@ -489,18 +504,17 @@ final class BinanceService {
     /// Cancels any running sync and deletes the stored credentials. `removeData` also deletes
     /// the cached Binance snapshot and links; manual records are never touched.
     ///
-    /// Throws `.credentialStorage` — and keeps reporting whatever is still stored — if the
-    /// Keychain refuses to delete either value; it never claims a disconnect that didn't happen.
+    /// Succeeds only when both values are verifiably gone. Otherwise throws — and keeps
+    /// reporting whatever is known to be stored; it never claims a disconnect that didn't happen.
     func disconnect(removeData: Bool, context: ModelContext) throws {
         generation += 1
         inFlight?.cancel()
         inFlight = nil
-        var deletionFailed = false
-        for account in [Self.keyAccount, Self.secretAccount] {
-            do { try secrets.delete(account) } catch { deletionFailed = true }
+        let deleted = keychainPair.delete()
+        credentialState = keychainPair.state()
+        guard deleted else {
+            throw credentialState == .uncertain ? BinanceError.credentialStateUncertain : BinanceError.credentialStorage
         }
-        refreshCredentialFlags()
-        guard !deletionFailed else { throw BinanceError.credentialStorage }
         lastError = nil
         lastFailureAt = nil
         automaticRetryAfter = nil
@@ -631,32 +645,10 @@ final class BinanceService {
         }
     }
 
-    /// Writes both values; on failure puts `previous` back (or removes both), so the Keychain
-    /// never keeps a mismatched key/secret pair and a failed reconnect doesn't lose a working key.
-    private func store(_ credentials: BinanceCredentials, restoringOnFailure previous: BinanceCredentials?) throws {
-        do {
-            try secrets.save(credentials.apiKey, account: Self.keyAccount)
-            try secrets.save(credentials.secretKey, account: Self.secretAccount)
-        } catch {
-            restoreCredentials(previous)
-            throw BinanceError.credentialStorage
-        }
-    }
-
-    private func restoreCredentials(_ previous: BinanceCredentials?) {
-        if let previous {
-            try? secrets.save(previous.apiKey, account: Self.keyAccount)
-            try? secrets.save(previous.secretKey, account: Self.secretAccount)
-        } else {
-            try? secrets.delete(Self.keyAccount)
-            try? secrets.delete(Self.secretAccount)
-        }
-        refreshCredentialFlags()
-    }
-
+    /// The verified pair, or nil when missing, partial, locked, failing or uncertain.
     private func storedCredentials() -> BinanceCredentials? {
-        guard let key = secrets.read(Self.keyAccount), let secret = secrets.read(Self.secretAccount) else { return nil }
-        let credentials = BinanceCredentials(apiKey: key, secretKey: secret)
+        guard let values = keychainPair.values() else { return nil }
+        let credentials = BinanceCredentials(apiKey: values.key, secretKey: values.secret)
         return credentials.isComplete ? credentials : nil
     }
 

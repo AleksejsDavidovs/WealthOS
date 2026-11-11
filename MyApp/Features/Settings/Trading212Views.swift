@@ -31,13 +31,15 @@ struct Trading212SettingsView: View {
                           systemImage: "theatermasks.fill")
                 }
             } else {
+                CredentialStateSection(state: service.credentialState, protectionUpgradeFailed: service.protectionUpgradeFailed,
+                                       retry: { service.reloadConnectionState() })
                 if service.isConnected { statusSection }
                 if !service.isConnected || service.needsReconnect { connectSection }
                 if let snapshot = snapshots.first {
                     if !service.isConnected { cachedSection(snapshot) }
                     duplicatesSection
                 }
-                if service.isConnected || service.hasLeftoverCredential { disconnectSection }
+                if service.isConnected || service.hasLeftoverCredential || service.credentialState == .uncertain { disconnectSection }
             }
             aboutSection
         }
@@ -224,6 +226,37 @@ struct Trading212SettingsView: View {
             DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
         } catch {
             message = error.localizedDescription
+        }
+    }
+}
+
+/// Explains Keychain states that are neither "connected" nor "not connected". Shared with Binance.
+struct CredentialStateSection: View {
+    let state: CredentialState
+    let protectionUpgradeFailed: Bool
+    let retry: () -> Void
+
+    var body: some View {
+        if let message {
+            Section {
+                Label(message, systemImage: "key.slash").font(.footnote).foregroundStyle(Theme.warning)
+                if state == .locked || state == .unavailable {
+                    Button("Try Again", action: retry)
+                }
+            } header: {
+                Text("Keychain")
+            }
+        }
+    }
+
+    private var message: String? {
+        switch state {
+        case .locked: "The iPhone is locked, so the stored API key can't be read. Nothing was deleted — unlock and try again."
+        case .unavailable: "The Keychain reported an error, so the stored API key can't be read right now. Nothing was deleted."
+        case .uncertain: "After a Keychain error WealthOS can't confirm which key is stored. Syncing is paused — disconnect, then connect again."
+        case .partial: "Only part of an API key is stored (an earlier removal didn't finish). Disconnect to remove it."
+        case .missing, .stored:
+            protectionUpgradeFailed ? "The stored key couldn't be moved to stronger Keychain protection yet. It keeps working; WealthOS will retry." : nil
         }
     }
 }

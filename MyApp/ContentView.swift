@@ -343,6 +343,8 @@ struct PINEntryView: View {
                        : "Incorrect PIN")
             case .lockedOut, .disabled:
                 reject(nil)            // the countdown / disabled text takes over
+            case .unavailable:
+                reject("PIN can't be checked right now. Use \(lock.biometryName) or your iPhone passcode.")
             case .notEnrolled:
                 clear()
                 lock.cancelPINEntry()

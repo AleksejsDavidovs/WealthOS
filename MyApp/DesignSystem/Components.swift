@@ -175,6 +175,22 @@ struct InfoBanner: View {
     }
 }
 
+/// Shown wherever live totals are used (Goals, Simulator, Accounts) when they aren't fully
+/// confirmed, so a lower-bound valuation is never presented as a verified amount.
+struct ValuationCompletenessBanner: View {
+    let summary: NetWorthSummary
+    /// What the warning refers to, e.g. "Goal funds".
+    var subject = "These totals"
+
+    var body: some View {
+        if !summary.isComplete {
+            InfoBanner(text: "Incomplete valuation — \(subject) only include confirmed amounts: "
+                       + summary.completenessIssues.joined(separator: "; ") + ". See Investments for details.",
+                       symbol: "exclamationmark.triangle.fill", tint: .orange)
+        }
+    }
+}
+
 struct EmptyStateCard: View {
     let title: String
     let message: String

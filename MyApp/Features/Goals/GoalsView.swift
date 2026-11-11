@@ -13,6 +13,7 @@ struct GoalsView: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
+                        ValuationCompletenessBanner(summary: engine.summary, subject: "available goal funds")
                         earmarkCard(engine)
                         NavigationLink { PurchaseImpactView() } label: { whatIfCard }
                             .buttonStyle(.plain)

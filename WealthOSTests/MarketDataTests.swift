@@ -21,7 +21,7 @@ final class MockHTTPClient: HTTPClient, @unchecked Sendable {
 
 final class MemorySecrets: SecretStore, @unchecked Sendable {
     var values: [String: String] = [:]
-    func read(_ account: String) -> String? { values[account] }
+    func lookup(_ account: String) -> SecretLookup { values[account].map { .found($0) } ?? .notFound }
     func save(_ value: String, account: String) throws { values[account] = value }
     func delete(_ account: String) throws { values[account] = nil }
 }

@@ -102,9 +102,10 @@ enum DataMaintenance {
         refreshSnapshot(context: context, baseCurrency: baseCurrency)
     }
 
-    static func refreshSnapshot(context: ModelContext, baseCurrency: String) {
+    @discardableResult
+    static func refreshSnapshot(context: ModelContext, baseCurrency: String) -> SnapshotService.AutomaticSnapshotOutcome {
         let engine = makeEngine(context: context, baseCurrency: baseCurrency)
-        SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
+        return SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
                                                 hasData: !engine.accounts.isEmpty || !engine.holdings.isEmpty
                                                     || engine.broker.snapshot != nil || engine.binance.snapshot != nil,
                                                 in: context)

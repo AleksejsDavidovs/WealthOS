@@ -29,6 +29,15 @@ struct SimulatorView: View {
                         InfoBanner(text: "Estimates based on your assumptions — not a prediction or guarantee. Investment returns vary and can be negative.",
                                    symbol: "exclamationmark.bubble.fill", tint: .orange)
                         scenarioPicker
+                        if model.isLoaded, !engine.summary.isComplete {
+                            // Live starting values equal the (incomplete) current totals → warn about
+                            // them; otherwise the scenario uses custom inputs and only an update would.
+                            ValuationCompletenessBanner(
+                                summary: engine.summary,
+                                subject: SimulatorViewModel.liveBalancesIfChanged(engine.summary, parameters: model.parameters) == nil
+                                    ? "the starting values taken from your current data"
+                                    : "your current data (your custom starting values are unaffected; updating from current data would use these lower bounds)")
+                        }
                         if model.isLoaded,
                            let live = SimulatorViewModel.liveBalancesIfChanged(engine.summary, parameters: model.parameters),
                            live != dismissedLiveBalances {
