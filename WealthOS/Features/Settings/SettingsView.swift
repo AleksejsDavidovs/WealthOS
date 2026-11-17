@@ -100,6 +100,8 @@ struct SettingsView: View {
                     Text("Read-only sync of your Trading 212 cash and positions and your Binance crypto. WealthOS can't place orders or move money.")
                 }
 
+                PlanningNotificationSettings()
+
                 Section {
                     NavigationLink { BankConnectionsSettingsView() } label: {
                         LabeledContent {

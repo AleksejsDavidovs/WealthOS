@@ -26,6 +26,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             FinanceReader { engine in
+                ScrollViewReader { scroller in
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
@@ -43,12 +44,30 @@ struct HomeView: View {
                                           onRecord: { showSnapshotEditor = true })
                         breakdownGrid(engine.summary)
                         MonthlyFlowCard(flow: engine.cashFlow(forMonthContaining: .now), code: baseCurrency)
+                        SubscriptionsReader { subscriptions, _ in
+                            if !subscriptions.isEmpty {
+                                NavigationLink { SubscriptionsView() } label: {
+                                    SubscriptionsCard(subscriptions: subscriptions, code: baseCurrency)
+                                }
+                                .buttonStyle(CardPressStyle())
+                            }
+                        }
+                        .id("subscriptions")
                         accountsSection(engine)
                         recentSection(engine)
                         goalsSection
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 20)
+                }
+                #if DEBUG
+                .onAppear {
+                    // Development aid: `-UIScrollTo subscriptions` for visual checks.
+                    if ProcessInfo.processInfo.arguments.contains("-UIScrollTo") {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo("subscriptions", anchor: .center) }
+                    }
+                }
+                #endif
                 }
                 .screenBackground()
                 .onAppear { DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency) }

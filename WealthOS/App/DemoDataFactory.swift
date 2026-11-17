@@ -123,6 +123,27 @@ enum DemoDataFactory {
         context.insert(Goal(name: "Japan Trip", type: .travel, targetAmount: 4_000,
                             targetDate: calendar.date(byAdding: .month, value: 7, to: now), allocatedAmount: 1_250,
                             monthlyContribution: 250))
+        // Subscription-like payments: one price increase, one confirmed, the rest left as suggestions.
+        for monthOffset in 0...8 {
+            guard let monthStart = calendar.date(byAdding: .month, value: monthOffset, to: start),
+                  let first = calendar.dateInterval(of: .month, for: monthStart)?.start else { continue }
+            for (dayNumber, note, amount, name) in [
+                (7, "Video streaming", monthOffset >= 7 ? Decimal(string: "11.99")! : Decimal(string: "9.99")!, "Subscriptions"),
+                (10, "Cloud storage", Decimal(string: "2.99")!, "Subscriptions"),
+                (2, "Gym membership", Decimal(35), "Health"),
+            ] {
+                guard let date = calendar.date(byAdding: .day, value: dayNumber - 1, to: first), date <= now else { continue }
+                context.insert(TransactionRecord(kind: .expense, amount: amount, date: date, note: note,
+                                                 accountID: checking.id, categoryID: category(name)))
+            }
+        }
+        context.insert(SubscriptionDecision(key: "note:music streaming", status: .confirmed))
+        context.insert(SubscriptionDecision(key: "note:video streaming", status: .confirmed))
+        context.insert(Budget(categoryID: nil, amount: 1_800))
+        context.insert(Budget(categoryID: category("Food"), amount: 240))
+        context.insert(Budget(categoryID: category("Entertainment"), amount: 60))
+        context.insert(Budget(categoryID: category("Shopping"), amount: 150, rollover: true))
+
         context.insert(RecurringRule(kind: .expense, amount: 13, accountID: checking.id, categoryID: category("Subscriptions"),
                                      note: "Music streaming", frequency: .monthly,
                                      startDate: calendar.date(byAdding: .month, value: 1, to: now) ?? now))

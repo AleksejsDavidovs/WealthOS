@@ -67,6 +67,10 @@ enum LedgerService {
         for rule in try context.fetch(FetchDescriptor<RecurringRule>()) where rule.categoryID == id {
             rule.categoryID = fallback.id
         }
+        // A budget is defined by its category; without it the limit has no meaning.
+        for budget in try context.fetch(FetchDescriptor<Budget>()) where budget.categoryID == id {
+            context.delete(budget)
+        }
         context.delete(category)
         try context.save()
     }
@@ -221,6 +225,8 @@ enum LedgerService {
         for item in try context.fetch(FetchDescriptor<Goal>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<SimulationScenario>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<MarketQuote>()) { context.delete(item) }
+        for item in try context.fetch(FetchDescriptor<Budget>()) { context.delete(item) }
+        for item in try context.fetch(FetchDescriptor<SubscriptionDecision>()) { context.delete(item) }
     }
 }
 

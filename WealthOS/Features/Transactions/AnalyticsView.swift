@@ -9,6 +9,7 @@ import Charts
 struct AnalyticsView: View {
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     @Query(sort: \TransactionCategory.sortOrder) private var categories: [TransactionCategory]
+    @Query private var budgets: [Budget]
 
     @State private var period: AnalyticsPeriod
     @State private var anchor: Date
@@ -312,7 +313,15 @@ struct AnalyticsView: View {
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary).monospacedDigit()
                         .frame(minWidth: 34, alignment: .trailing)
                 }
-                Text("\(share.count) transaction\(share.count == 1 ? "" : "s")").font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("\(share.count) transaction\(share.count == 1 ? "" : "s")")
+                    // Budgets are monthly: compared only on the Month view.
+                    if period == .month, kind == .expense, let budget = budgets.first(where: { $0.categoryID == share.categoryID && $0.categoryID != nil }) {
+                        Text("· of \(MoneyFormat.string(budget.amount, code: baseCurrency, fractionDigits: 0)) budget")
+                            .foregroundStyle(share.amount > budget.amount ? Theme.negative : .secondary)
+                    }
+                }
+                .font(.caption2).foregroundStyle(.secondary)
             }
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }

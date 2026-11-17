@@ -23,6 +23,8 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     /// Version 2+. Cached Trading 212 / Binance data and reconciliation links — never API keys
     /// or secrets, which stay in the device Keychain. nil in version 1 backups.
     var external: ExternalDTO? = nil
+    /// Budgets and subscription decisions (optional; absent in backups made before budgets).
+    var planning: PlanningDTO? = nil
 
     var recordCount: Int {
         accounts.count + transactions.count + categories.count + recurringRules.count + holdings.count
@@ -72,6 +74,17 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     }
     struct ScenarioDTO: Codable, Equatable, Sendable {
         var id: UUID, kind: String, name: String, parameters: SimulationParameters, updatedAt: Date
+    }
+
+    struct PlanningDTO: Codable, Equatable, Sendable {
+        var budgets: [BudgetDTO]
+        var subscriptionDecisions: [SubscriptionDecisionDTO]
+    }
+    struct BudgetDTO: Codable, Equatable, Sendable {
+        var id: UUID, categoryID: UUID?, amount: Decimal, rollover: Bool, alertedMonth: String, alertedLevel: Int, createdAt: Date
+    }
+    struct SubscriptionDecisionDTO: Codable, Equatable, Sendable {
+        var id: UUID, key: String, status: String, createdAt: Date
     }
 
     // MARK: External providers (version 2)
@@ -190,6 +203,11 @@ nonisolated extension BackupPayload {
         try unique(trades.map(\.id), "trade")
         try unique(goals.map(\.id), "goal")
         try unique(rates.map(\.code), "exchange rate")
+        if let planning {
+            try unique(planning.budgets.map(\.id), "budget")
+            try unique(planning.subscriptionDecisions.map(\.key), "subscription decision")
+            if planning.budgets.contains(where: { $0.amount <= 0 }) { throw BackupValidationError.invalidValue("budget amount") }
+        }
 
         let accountIDs = Set(accounts.map(\.id))
         let categoryIDs = Set(categories.map(\.id))

@@ -460,3 +460,60 @@ final class SimulationScenario {
         }
     }
 }
+
+// MARK: - Planning (added after bank support; new tables only, every field has a default,
+// so existing stores migrate automatically)
+
+/// A monthly spending limit for one expense category, or for all expenses (`categoryID == nil`),
+/// in the base currency.
+@Model
+final class Budget {
+    var id: UUID = UUID()
+    var categoryID: UUID?
+    var amount: Decimal = 0
+    /// Adds last month's unspent amount (never a deficit) to this month's limit.
+    var rollover: Bool = false
+    /// Notification bookkeeping: the month ("2026-11") and highest threshold (80 / 100) already
+    /// notified, so each threshold is announced at most once per month.
+    var alertedMonth: String = ""
+    var alertedLevel: Int = 0
+    var createdAt: Date = Date()
+
+    init(id: UUID = UUID(), categoryID: UUID?, amount: Decimal, rollover: Bool = false, createdAt: Date = .now) {
+        self.id = id
+        self.categoryID = categoryID
+        self.amount = amount
+        self.rollover = rollover
+        self.createdAt = createdAt
+    }
+}
+
+nonisolated enum SubscriptionDecisionStatus: String, Codable, Sendable {
+    /// The user confirmed a suggestion, or marked a payment as a subscription.
+    case confirmed
+    /// "Not a subscription": never suggested again.
+    case dismissed
+}
+
+/// The user's decision about a payee detected (or marked) as a subscription. Detection itself
+/// is computed from transactions; only decisions are stored.
+@Model
+final class SubscriptionDecision {
+    var id: UUID = UUID()
+    /// The payee key (`SubscriptionDetector.key`), e.g. "merchant:spotify" or "note:music streaming".
+    var key: String = ""
+    var statusRaw: String = SubscriptionDecisionStatus.confirmed.rawValue
+    var createdAt: Date = Date()
+
+    init(id: UUID = UUID(), key: String, status: SubscriptionDecisionStatus, createdAt: Date = .now) {
+        self.id = id
+        self.key = key
+        self.statusRaw = status.rawValue
+        self.createdAt = createdAt
+    }
+
+    var status: SubscriptionDecisionStatus {
+        get { SubscriptionDecisionStatus(rawValue: statusRaw) ?? .confirmed }
+        set { statusRaw = newValue.rawValue }
+    }
+}

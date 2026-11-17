@@ -49,6 +49,8 @@ enum Theme {
 
 struct CardModifier: ViewModifier {
     var padding: CGFloat = Theme.cardPadding
+    /// Off for cards placed in List rows: a row clips the soft shadow into a visible straight edge.
+    var shadow = true
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
@@ -67,14 +69,14 @@ struct CardModifier: ViewModifier {
                         RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
                             .strokeBorder(.white.opacity(colorScheme == .dark ? 0.06 : 0), lineWidth: 1)
                     }
-                    .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.05), radius: 10, y: 4)
+                    .shadow(color: .black.opacity(colorScheme == .dark || !shadow ? 0 : 0.05), radius: 10, y: 4)
             }
     }
 }
 
 extension View {
-    func card(padding: CGFloat = Theme.cardPadding) -> some View {
-        modifier(CardModifier(padding: padding))
+    func card(padding: CGFloat = Theme.cardPadding, shadow: Bool = true) -> some View {
+        modifier(CardModifier(padding: padding, shadow: shadow))
     }
 
     /// Liquid Glass on iOS 26+, material fallback on earlier versions.
