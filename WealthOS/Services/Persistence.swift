@@ -10,7 +10,8 @@ enum Persistence {
         NetWorthSnapshot.self, Goal.self, SimulationScenario.self, MarketQuote.self,
         BrokerAccountSnapshot.self, BrokerPosition.self, BrokerLink.self,
         BinanceAccountSnapshot.self, BinanceHolding.self, BinanceLink.self,
-        BankConnection.self, BankAccountLink.self, BankTransaction.self, BankCounterpartyRule.self
+        BankConnection.self, BankAccountLink.self, BankTransaction.self, BankCounterpartyRule.self,
+        Budget.self, SubscriptionDecision.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }
@@ -127,6 +128,8 @@ enum SettingsKey {
     static let marketAutoApplyFX = "marketAutoApplyFX"
     static let marketLastSuccess = "marketLastSuccess"
     static let marketRateLimitPrefix = "marketRateLimit."
+    static let budgetAlerts = "budgetAlertsEnabled"
+    static let subscriptionReminders = "subscriptionRemindersEnabled"
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable {

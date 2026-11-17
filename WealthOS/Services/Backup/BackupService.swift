@@ -73,8 +73,37 @@ enum BackupService {
                 return .init(id: scenario.id, kind: scenario.kindRaw, name: scenario.name, parameters: parameters,
                              updatedAt: scenario.updatedAt)
             },
-            external: try externalPayload(from: context)
+            external: try externalPayload(from: context),
+            planning: try planningPayload(from: context)
         )
+    }
+
+    static func planningPayload(from context: ModelContext) throws -> BackupPayload.PlanningDTO? {
+        let budgets = try context.fetch(FetchDescriptor<Budget>())
+        let decisions = try context.fetch(FetchDescriptor<SubscriptionDecision>())
+        guard !budgets.isEmpty || !decisions.isEmpty else { return nil }
+        return .init(budgets: budgets.map { .init(id: $0.id, categoryID: $0.categoryID, amount: $0.amount, rollover: $0.rollover,
+                                                  alertedMonth: $0.alertedMonth, alertedLevel: $0.alertedLevel,
+                                                  createdAt: $0.createdAt) },
+                     subscriptionDecisions: decisions.map { .init(id: $0.id, key: $0.key, status: $0.statusRaw,
+                                                                  createdAt: $0.createdAt) })
+    }
+
+    /// Budgets whose category isn't in the backup are skipped rather than pointing nowhere.
+    static func insertPlanning(_ payload: BackupPayload, into context: ModelContext) {
+        guard let planning = payload.planning else { return }
+        let categories = Set(payload.categories.map(\.id))
+        for b in planning.budgets where b.categoryID.map(categories.contains) ?? true {
+            let budget = Budget(id: b.id, categoryID: b.categoryID, amount: b.amount, rollover: b.rollover, createdAt: b.createdAt)
+            budget.alertedMonth = b.alertedMonth
+            budget.alertedLevel = b.alertedLevel
+            context.insert(budget)
+        }
+        for d in planning.subscriptionDecisions {
+            context.insert(SubscriptionDecision(id: d.id, key: d.key,
+                                                status: SubscriptionDecisionStatus(rawValue: d.status) ?? .confirmed,
+                                                createdAt: d.createdAt))
+        }
     }
 
     /// Non-secret provider caches and links. API keys and secrets live only in the Keychain
@@ -233,6 +262,7 @@ enum BackupService {
             insert(payload, into: context)
             insertExternal(payload, into: context)
             insertBanking(payload, consents: consents, into: context)
+            insertPlanning(payload, into: context)
             try save(context)
         } catch {
             context.rollback()

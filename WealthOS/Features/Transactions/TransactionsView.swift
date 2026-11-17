@@ -55,6 +55,7 @@ struct TransactionsView: View {
     @Query(sort: \TransactionRecord.date, order: .reverse) private var transactions: [TransactionRecord]
     @Query(sort: \TransactionCategory.sortOrder) private var categories: [TransactionCategory]
     @Query(sort: \BankTransaction.bookingDate, order: .reverse) private var bankRows: [BankTransaction]
+    @Query(sort: \Budget.createdAt) private var budgets: [Budget]
 
     @State private var searchText = ""
     @State private var filter = TransactionFilter()
@@ -64,6 +65,8 @@ struct TransactionsView: View {
     @State private var saveError: String?
     @State private var showAccountEditor = false
     @State private var showAnalytics = false
+    @State private var showBudgets = false
+    @State private var showSubscriptions = false
     #if DEBUG
     @State private var showDebugCategoryEditor = false
     #endif
@@ -82,6 +85,17 @@ struct TransactionsView: View {
                 .buttonStyle(CardPressStyle())
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                if !budgets.isEmpty {
+                    Button { showBudgets = true } label: {
+                        BudgetsCard(statuses: PlanningMonitor.budgetStatuses(budgets, entries: engine.cashFlowEntries()),
+                                    code: baseCurrency)
+                    }
+                    .buttonStyle(CardPressStyle())
+                    .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
             }
             if !app.isDemoMode { bankSections(engine: engine) }
             if filtered.isEmpty && !transactions.isEmpty {
@@ -112,6 +126,16 @@ struct TransactionsView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .swipeActions(edge: .leading) {
+                            if transaction.kind == .expense,
+                               let payee = SubscriptionDetector.payee(for: transaction,
+                                                                      bankRow: bankRows.first { $0.ledgerRecordID == transaction.id }) {
+                                Button { markSubscription(payee.key) } label: {
+                                    Label("Subscription", systemImage: "repeat")
+                                }
+                                .tint(.purple)
+                            }
+                        }
                     }
                 }
             }
@@ -134,6 +158,8 @@ struct TransactionsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         NavigationLink { AnalyticsView() } label: { Label("Analytics", systemImage: "chart.pie") }
+                        NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.33percent") }
+                        NavigationLink { SubscriptionsView() } label: { Label("Subscriptions", systemImage: "repeat.circle") }
                         NavigationLink { RecurringRulesView() } label: { Label("Recurring", systemImage: "repeat") }
                         NavigationLink { CategoryManagerView() } label: { Label("Categories", systemImage: "square.grid.2x2") }
                     } label: {
@@ -161,12 +187,16 @@ struct TransactionsView: View {
                 }
             }
             .navigationDestination(isPresented: $showAnalytics) { AnalyticsView(filter: filter) }
+            .navigationDestination(isPresented: $showBudgets) { BudgetsView() }
+            .navigationDestination(isPresented: $showSubscriptions) { SubscriptionsView() }
             #if DEBUG
             .onAppear {
                 // Development aid: `-UIScreen analytics|categoryEditor` (see AppModel).
                 switch app.debugScreen {
                 case "analytics": showAnalytics = true
                 case "analyticsMonth": filter.range = .thisMonth; showAnalytics = true
+                case "budgets": showBudgets = true
+                case "subscriptions": showSubscriptions = true
                 case "categoryEditor": showDebugCategoryEditor = true
                 default: break
                 }
@@ -238,6 +268,12 @@ struct TransactionsView: View {
                 Text("Recorded automatically once the bank books them.")
             }
         }
+    }
+
+    /// Swipe action: the user says this payee is a subscription.
+    private func markSubscription(_ key: String) {
+        do { try Persistence.commit(context) { try SubscriptionDecisions.set(.confirmed, for: key, in: context) } }
+        catch { saveError = error.localizedDescription }
     }
 
     private func accountName(for row: BankTransaction, engine: FinanceEngine) -> String? {
@@ -408,7 +444,7 @@ struct CashFlowCard: View {
                 figure("Expenses", totals.expenses, Theme.negative, symbol: "arrow.up.right", alignment: .trailing)
             }
         }
-        .card()
+        .card(shadow: false)  // lives in a List row
         .contentShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .animation(.spring(response: 0.35), value: net)
         .accessibilityElement(children: .ignore)

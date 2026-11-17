@@ -115,6 +115,11 @@ enum DataMaintenance {
     @discardableResult
     static func refreshSnapshot(context: ModelContext, baseCurrency: String) -> SnapshotService.AutomaticSnapshotOutcome {
         let engine = makeEngine(context: context, baseCurrency: baseCurrency)
+        // Budget thresholds and subscription reminders: real data only — never the in-memory
+        // demo store or a test host.
+        if !Persistence.isHostingTests(), context.container.configurations.contains(where: { !$0.isStoredInMemoryOnly }) {
+            PlanningMonitor.run(context: context, engine: engine)
+        }
         return SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
                                                 hasData: !engine.accounts.isEmpty || !engine.holdings.isEmpty
                                                     || engine.broker.snapshot != nil || engine.binance.snapshot != nil,

@@ -21,7 +21,6 @@ struct InvestmentsView: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
-                        MarketStatusCard()
                         portfolioHeader(engine)
                         if !engine.hasAnyPositions && engine.broker.snapshot == nil && engine.binance.snapshot == nil {
                             EmptyStateCard(title: "Track your portfolio",
