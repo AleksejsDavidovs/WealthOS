@@ -15,6 +15,10 @@ final class AppModel {
     let loadError: String?
     private(set) var demoContainer: ModelContainer?
     var selectedTab: AppTab = .home
+    #if DEBUG
+    /// Development aid: a screen to open at launch for visual checks (see `-UIScreen`).
+    var debugScreen: String?
+    #endif
     /// Set by Quick Add controls; MainTabView presents the transaction editor.
     var quickAddRequest: TransactionEditorRequest?
 
@@ -40,6 +44,10 @@ final class AppModel {
         // launches straight into the in-memory demo store for visual checks.
         // `-UITab <name>` selects a tab without demo data (e.g. to inspect empty states).
         let arguments = ProcessInfo.processInfo.arguments
+        // `-UIScreen <analytics|categoryEditor>` additionally opens that screen on the Transactions tab.
+        if let index = arguments.firstIndex(of: "-UIScreen"), index + 1 < arguments.count {
+            debugScreen = arguments[index + 1]
+        }
         let demoIndex = arguments.firstIndex(of: "-UIDemoTab")
         let tabIndex = demoIndex ?? arguments.firstIndex(of: "-UITab")
         if let index = tabIndex, index + 1 < arguments.count {
@@ -86,12 +94,14 @@ enum DataMaintenance {
         let binance = BinancePortfolio(snapshot: (try? context.fetch(FetchDescriptor<BinanceAccountSnapshot>()))?.first,
                                        holdings: (try? context.fetch(FetchDescriptor<BinanceHolding>())) ?? [],
                                        links: (try? context.fetch(FetchDescriptor<BinanceLink>())) ?? [])
+        let bank = BankPortfolio(links: (try? context.fetch(FetchDescriptor<BankAccountLink>())) ?? [],
+                                 connections: (try? context.fetch(FetchDescriptor<BankConnection>())) ?? [])
         return FinanceEngine(accounts: (try? context.fetch(FetchDescriptor<Account>())) ?? [],
                              transactions: (try? context.fetch(FetchDescriptor<TransactionRecord>())) ?? [],
                              holdings: (try? context.fetch(FetchDescriptor<Holding>())) ?? [],
                              trades: (try? context.fetch(FetchDescriptor<InvestmentTrade>())) ?? [],
                              converter: CurrencyConverter.make(base: baseCurrency, rates: rates), broker: broker,
-                             binance: binance)
+                             binance: binance, bank: bank)
     }
 
     /// Launch / foreground housekeeping: default categories, due recurring transactions,
@@ -134,6 +144,8 @@ struct FinanceReader<Content: View>: View {
     @Query private var binanceSnapshots: [BinanceAccountSnapshot]
     @Query private var binanceHoldings: [BinanceHolding]
     @Query private var binanceLinks: [BinanceLink]
+    @Query private var bankLinks: [BankAccountLink]
+    @Query private var bankConnections: [BankConnection]
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     /// Balances depend on "today" (future-dated records count from their date), which no
     /// query observes; bumping this at midnight or after a date change re-evaluates the body.
@@ -151,7 +163,8 @@ struct FinanceReader<Content: View>: View {
                               broker: BrokerPortfolio(snapshot: brokerSnapshots.first, positions: brokerPositions,
                                                       links: brokerLinks),
                               binance: BinancePortfolio(snapshot: binanceSnapshots.first, holdings: binanceHoldings,
-                                                        links: binanceLinks)))
+                                                        links: binanceLinks),
+                              bank: BankPortfolio(links: bankLinks, connections: bankConnections)))
             .task {
                 for await _ in NotificationCenter.default.notifications(named: UIApplication.significantTimeChangeNotification) {
                     day = Calendar.current.startOfDay(for: .now)

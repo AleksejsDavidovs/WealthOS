@@ -23,6 +23,9 @@ struct TransactionRow: View {
                     if transaction.recurringRuleID != nil {
                         Image(systemName: "repeat").accessibilityLabel("Recurring")
                     }
+                    if BankReconciler.isBankImport(transaction) {
+                        Image(systemName: "building.columns").accessibilityLabel("Imported from bank")
+                    }
                     if isScheduled {
                         Text("Scheduled").foregroundStyle(Theme.warning)
                     }

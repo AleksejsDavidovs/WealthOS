@@ -1,0 +1,72 @@
+// WealthOS banking backend on Cloudflare Workers (Free plan).
+//
+// Two completely separate Workers: `--env sandbox` and `--env production`. Each has its own
+// name/URL, D1 database, secrets and Enable Banking application. There is no top-level
+// (environment-less) deployment.
+//
+// Secrets are NOT in this file. They are set per environment with `wrangler secret put`
+// (see README.md): EB_APPLICATION_ID, EB_PRIVATE_KEY_PEM, WOS_CLIENT_SECRET, WOS_DATA_KEY,
+// and — production only, as the explicit real-bank opt-in — WOS_ALLOW_PRODUCTION.
+//
+// This file is the template. Copy it to wrangler.local.jsonc (gitignored), put in your
+// workers.dev subdomain and the ids printed by `wrangler d1 create`, and run wrangler with
+// `-c wrangler.local.jsonc`, so personal deployment details stay out of the repository.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": "src/entry.py",
+  "compatibility_date": "2026-11-16",
+  "compatibility_flags": ["python_workers"],
+  // Copies ../app into src/app before every dev/deploy, so the Worker runs the same code.
+  "build": { "command": "sh ./sync_app.sh", "watch_dir": "../app" },
+
+  "env": {
+    "sandbox": {
+      "name": "wealthos-banking-sandbox",
+      "workers_dev": true,
+      "preview_urls": false,
+      // No request/console logs: URLs carry authorization codes and connection ids.
+      "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
+      "vars": {
+        "EB_ENVIRONMENT": "sandbox",
+        "EB_REDIRECT_URL": "https://wealthos-banking-sandbox.YOUR-SUBDOMAIN.workers.dev/v1/callback",
+        "WOS_ALLOWED_HOSTS": "wealthos-banking-sandbox.YOUR-SUBDOMAIN.workers.dev",
+        "EB_ASPSP_NAME": "Swedbank",
+        "EB_ASPSP_COUNTRY": "LV",
+        "EB_CONSENT_DAYS": "90",
+        "WOS_CLIENT_ID": "wealthos-ios",
+        "WOS_TRUST_CF_CONNECTING_IP": "true"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "wealthos-banking-sandbox",
+          "database_id": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+
+    "production": {
+      "name": "wealthos-banking-prod",
+      "workers_dev": true,
+      "preview_urls": false,
+      "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
+      "vars": {
+        "EB_ENVIRONMENT": "production",
+        "EB_REDIRECT_URL": "https://wealthos-banking-prod.YOUR-SUBDOMAIN.workers.dev/v1/callback",
+        "WOS_ALLOWED_HOSTS": "wealthos-banking-prod.YOUR-SUBDOMAIN.workers.dev",
+        "EB_ASPSP_NAME": "Swedbank",
+        "EB_ASPSP_COUNTRY": "LV",
+        "EB_CONSENT_DAYS": "90",
+        "WOS_CLIENT_ID": "wealthos-iphone",
+        "WOS_TRUST_CF_CONNECTING_IP": "true"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "wealthos-banking-prod",
+          "database_id": "00000000-0000-0000-0000-000000000002"
+        }
+      ]
+    }
+  }
+}

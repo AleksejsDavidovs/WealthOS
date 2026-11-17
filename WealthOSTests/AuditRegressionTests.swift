@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 // Regression tests for the independent audit findings (AUD-002, AUD-003, AUD-006, …).
 // AUD-001 (Binance partial snapshots) lives in BinanceTests. Everything here uses isolated
@@ -217,7 +217,7 @@ struct CredentialLifecycleTests {
 
     @Test func lockManagerReportsAFailedPINRemoval() async throws {
         let store = FlakySecrets()
-        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: store))
+        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: store), defaults: AppLockTestSupport.defaults)
         try await lock.enrollPIN("246810")
         store.failDelete = ["pinVerifier"]
         #expect(throws: PINError.removalFailed) { try lock.disablePIN() }

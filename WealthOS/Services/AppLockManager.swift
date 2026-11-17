@@ -53,19 +53,24 @@ final class AppLockManager {
 
     let pin: AppPINManager
     private let biometrics: BiometricAuthenticating
+    /// Where the lock preference lives. The app uses `.standard`; tests inject a throwaway suite
+    /// so they never touch the real preference.
+    private let defaults: UserDefaults
 
     /// Defaults are created inside this main-actor initializer (not as default-argument
     /// expressions, which Swift evaluates in a nonisolated context), so no isolation warning
     /// and no cross-actor construction of the authenticator or PIN store.
-    init(biometrics: BiometricAuthenticating? = nil, pin: AppPINManager? = nil) {
+    init(biometrics: BiometricAuthenticating? = nil, pin: AppPINManager? = nil, defaults: UserDefaults? = nil) {
         let pin = pin ?? AppPINManager()
-        isLocked = UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled)
+        let defaults = defaults ?? .standard
+        self.defaults = defaults
+        isLocked = defaults.bool(forKey: SettingsKey.lockEnabled)
         self.biometrics = biometrics ?? LAContextAuthenticator()
         self.pin = pin
         isPINEnabled = pin.isEnrolled
     }
 
-    var isLockEnabled: Bool { UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled) }
+    var isLockEnabled: Bool { defaults.bool(forKey: SettingsKey.lockEnabled) }
     var isPINUsable: Bool { isPINEnabled && !pin.isDisabledByFailures }
 
     var biometryName: String {
@@ -229,7 +234,7 @@ final class AppLockManager {
             let reason = enabled ? "Enable the WealthOS lock" : "Turn off the WealthOS lock"
             guard await reauthorize(reason: reason) else { return false }
         }
-        UserDefaults.standard.set(enabled, forKey: SettingsKey.lockEnabled)
+        defaults.set(enabled, forKey: SettingsKey.lockEnabled)
         if !enabled {
             isLocked = false
             showPINEntry = false

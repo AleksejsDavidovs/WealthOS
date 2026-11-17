@@ -54,6 +54,7 @@ struct TransactionsView: View {
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     @Query(sort: \TransactionRecord.date, order: .reverse) private var transactions: [TransactionRecord]
     @Query(sort: \TransactionCategory.sortOrder) private var categories: [TransactionCategory]
+    @Query(sort: \BankTransaction.bookingDate, order: .reverse) private var bankRows: [BankTransaction]
 
     @State private var searchText = ""
     @State private var filter = TransactionFilter()
@@ -62,6 +63,10 @@ struct TransactionsView: View {
     @State private var pendingDeletion: TransactionRecord?
     @State private var saveError: String?
     @State private var showAccountEditor = false
+    @State private var showAnalytics = false
+    #if DEBUG
+    @State private var showDebugCategoryEditor = false
+    #endif
 
     private func transactionList(engine: FinanceEngine) -> some View {
         let filtered = filteredTransactions(engine: engine)
@@ -70,12 +75,16 @@ struct TransactionsView: View {
                 DemoBanner().frame(maxWidth: .infinity).listRowBackground(Color.clear)
             }
             Section {
-                FilteredSummaryView(transactions: filtered, engine: engine, code: baseCurrency,
-                                    title: filter.isActive || !searchText.isEmpty ? "Filtered" : filter.range.title)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                Button { showAnalytics = true } label: {
+                    CashFlowCard(transactions: filtered, engine: engine, code: baseCurrency,
+                                 title: filter.isActive || !searchText.isEmpty ? "Filtered" : filter.range.title)
+                }
+                .buttonStyle(CardPressStyle())
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
-            if filtered.isEmpty {
+            if !app.isDemoMode { bankSections(engine: engine) }
+            if filtered.isEmpty && !transactions.isEmpty {
                 Section {
                     if searchText.isEmpty {
                         ContentUnavailableView {
@@ -113,7 +122,7 @@ struct TransactionsView: View {
     var body: some View {
         NavigationStack {
             FinanceReader { engine in
-                if transactions.isEmpty {
+                if transactions.isEmpty && (app.isDemoMode || !hasBankActivity) {
                     TransactionsEmptyState(hasAccounts: !engine.accounts.isEmpty, isDemo: app.isDemoMode,
                                            onAdd: { editorRequest = .init(kind: $0) },
                                            onAddAccount: { showAccountEditor = true })
@@ -124,7 +133,7 @@ struct TransactionsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
-                        NavigationLink { StatisticsView() } label: { Label("Statistics", systemImage: "chart.bar.xaxis") }
+                        NavigationLink { AnalyticsView() } label: { Label("Analytics", systemImage: "chart.pie") }
                         NavigationLink { RecurringRulesView() } label: { Label("Recurring", systemImage: "repeat") }
                         NavigationLink { CategoryManagerView() } label: { Label("Categories", systemImage: "square.grid.2x2") }
                     } label: {
@@ -151,6 +160,20 @@ struct TransactionsView: View {
                     .accessibilityLabel("Add transaction")
                 }
             }
+            .navigationDestination(isPresented: $showAnalytics) { AnalyticsView(filter: filter) }
+            #if DEBUG
+            .onAppear {
+                // Development aid: `-UIScreen analytics|categoryEditor` (see AppModel).
+                switch app.debugScreen {
+                case "analytics": showAnalytics = true
+                case "analyticsMonth": filter.range = .thisMonth; showAnalytics = true
+                case "categoryEditor": showDebugCategoryEditor = true
+                default: break
+                }
+                app.debugScreen = nil
+            }
+            .sheet(isPresented: $showDebugCategoryEditor) { CategoryEditorView(category: nil, kind: .expense) }
+            #endif
             .sheet(isPresented: $showFilters) { TransactionFilterView(filter: $filter) }
             .sheet(item: $editorRequest) { TransactionEditorView(request: $0) }
             .sheet(isPresented: $showAccountEditor) { AccountEditorView(account: nil) }
@@ -172,6 +195,53 @@ struct TransactionsView: View {
             }
             .saveErrorAlert($saveError)
         }
+    }
+
+    // MARK: Bank transactions not in the ledger yet
+
+    private var reviewRows: [BankTransaction] { bankRows.filter { $0.status == .booked && $0.resolution == .needsReview } }
+    private var pendingRows: [BankTransaction] { bankRows.filter { $0.status == .pending } }
+    private var hasBankActivity: Bool { !reviewRows.isEmpty || !pendingRows.isEmpty }
+
+    /// Booked bank transactions waiting for a decision, and pending ones. Neither is in the
+    /// ledger, so neither changes totals; the account balance already reflects them via the bank.
+    @ViewBuilder
+    private func bankSections(engine: FinanceEngine) -> some View {
+        let review = reviewRows
+        if !review.isEmpty {
+            Section {
+                ForEach(review.prefix(5)) { row in
+                    NavigationLink { BankReviewDetailView(row: row) } label: {
+                        BankTransactionSummaryRow(row: row, accountName: accountName(for: row, engine: engine))
+                    }
+                }
+                NavigationLink { BankReviewListView() } label: {
+                    Label(review.count > 5 ? "Review All \(review.count)" : "Open Review", systemImage: "questionmark.circle")
+                        .foregroundStyle(Theme.accent)
+                }
+            } header: {
+                Text("From your bank · to review")
+            } footer: {
+                Text("Not counted in income or spending until you record them. Your bank balance already includes them.")
+            }
+        }
+        let pending = pendingRows
+        if !pending.isEmpty {
+            Section {
+                ForEach(pending) { row in
+                    BankTransactionSummaryRow(row: row, accountName: accountName(for: row, engine: engine))
+                        .opacity(0.6)
+                }
+            } header: {
+                Text("Pending at the bank")
+            } footer: {
+                Text("Recorded automatically once the bank books them.")
+            }
+        }
+    }
+
+    private func accountName(for row: BankTransaction, engine: FinanceEngine) -> String? {
+        engine.bank.links.first { $0.accountKey == row.accountKey }?.localAccountID.flatMap { engine.accountsByID[$0]?.name }
     }
 
     private func filteredTransactions(engine: FinanceEngine) -> [TransactionRecord] {
@@ -286,7 +356,9 @@ struct TransactionsEmptyState: View {
     }
 }
 
-struct FilteredSummaryView: View {
+/// The period's cash flow at a glance; tapping it opens Analytics. Counts only income and expense
+/// records up to today (no transfers, balance adjustments, scheduled or unrecorded bank rows).
+struct CashFlowCard: View {
     let transactions: [TransactionRecord]
     let engine: FinanceEngine
     let code: String
@@ -294,14 +366,55 @@ struct FilteredSummaryView: View {
 
     var body: some View {
         let totals = computeTotals()
-        HStack(spacing: 12) {
-            summaryItem("Income", totals.income, Theme.positive)
-            summaryItem("Expenses", totals.expenses, Theme.negative)
-            summaryItem("Net", totals.income - totals.expenses, Theme.signColor(totals.income - totals.expenses))
+        let net = totals.income - totals.expenses
+        let sum = totals.income + totals.expenses
+        let incomeShare = sum > 0 ? CGFloat((totals.income / sum).doubleValue) : 0.5
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Label(title, systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Text("Analytics").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Theme.accent)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Net cash flow").font(.caption).foregroundStyle(.secondary)
+                Text(MoneyFormat.string(net, code: code, showSign: net != 0))
+                    .scaledFont(32, weight: .bold, relativeTo: .largeTitle)
+                    .monospacedDigit().foregroundStyle(Theme.signColor(net))
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .contentTransition(.numericText())
+            }
+            GeometryReader { proxy in
+                let spacing: CGFloat = sum > 0 && totals.income > 0 && totals.expenses > 0 ? 3 : 0
+                let width = max(0, proxy.size.width - spacing)
+                HStack(spacing: spacing) {
+                    if sum == 0 {
+                        Capsule().fill(Color.secondary.opacity(0.18))
+                    } else {
+                        if totals.income > 0 {
+                            Capsule().fill(Theme.positive.gradient).frame(width: max(6, width * incomeShare))
+                        }
+                        if totals.expenses > 0 {
+                            Capsule().fill(Theme.negative.gradient)
+                        }
+                    }
+                }
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+            HStack(alignment: .top) {
+                figure("Income", totals.income, Theme.positive, symbol: "arrow.down.left")
+                Spacer(minLength: 12)
+                figure("Expenses", totals.expenses, Theme.negative, symbol: "arrow.up.right", alignment: .trailing)
+            }
         }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title) totals")
+        .card()
+        .contentShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+        .animation(.spring(response: 0.35), value: net)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Cash flow, \(title). Net \(MoneyFormat.string(net, code: code, showSign: true)). Income \(MoneyFormat.string(totals.income, code: code)). Expenses \(MoneyFormat.string(totals.expenses, code: code)).")
+        .accessibilityHint("Opens analytics")
+        .accessibilityAddTraits(.isButton)
     }
 
     private func computeTotals() -> (income: Decimal, expenses: Decimal) {
@@ -315,15 +428,26 @@ struct FilteredSummaryView: View {
         return (income, expenses)
     }
 
-    private func summaryItem(_ title: String, _ value: Decimal, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(MoneyFormat.string(value, code: code, fractionDigits: 0))
-                .font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color)
-                .lineLimit(1).minimumScaleFactor(0.6)
+    private func figure(_ title: String, _ value: Decimal, _ color: Color, symbol: String,
+                        alignment: HorizontalAlignment = .leading) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.caption2.weight(.bold)).foregroundStyle(color)
+                Text(title).font(.caption).foregroundStyle(.secondary)
+            }
+            Text(MoneyFormat.string(value, code: code))
+                .font(.headline).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card(padding: 12)
+    }
+}
+
+/// Subtle press feedback for tappable cards.
+struct CardPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.25), value: configuration.isPressed)
     }
 }
 

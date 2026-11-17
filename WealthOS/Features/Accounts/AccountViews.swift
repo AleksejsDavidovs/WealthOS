@@ -99,9 +99,20 @@ struct AccountDetailView: View {
                         if account.isArchived {
                             Label("Archived", systemImage: "archivebox").font(.caption).foregroundStyle(.secondary)
                         }
+                        if let link = engine.bankLink(for: account) {
+                            Label("Confirmed \(link.bankTitle) balance\(link.lastSuccessfulSyncAt.map { " · synced \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")",
+                                  systemImage: "building.columns")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if engine.bank.isUnverified(link, now: .now) {
+                                Text("Last known balance — not verified since \(link.restoredFromBackup ? "restoring a backup" : "the bank connection ended").")
+                                    .font(.caption).foregroundStyle(Theme.warning)
+                            }
+                        }
                     }
                     .padding(.vertical, 6)
-                    Button("Update Balance", systemImage: "pencil.and.list.clipboard") { showBalanceUpdate = true }
+                    if engine.bankLink(for: account) == nil {
+                        Button("Update Balance", systemImage: "pencil.and.list.clipboard") { showBalanceUpdate = true }
+                    }
                     Button("Add Transaction", systemImage: "plus.circle") {
                         editorRequest = .init(kind: .expense, presetAccountID: account.id)
                     }

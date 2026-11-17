@@ -1,6 +1,6 @@
 import Foundation
 import SwiftData
-@testable import MyApp
+@testable import WealthOS
 
 /// Exact copy of the persisted model schema as shipped in commit c5554c4 (before market data).
 /// Used only to create a real on-disk store in the old format and verify that the current

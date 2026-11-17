@@ -1,0 +1,18 @@
+# Never commit secrets, keys or banking data.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+keys/
+data/
+*.sqlite3
+*.db
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+!.env.production.example

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 @Suite("Appearance preference")
 struct AppearanceTests {
