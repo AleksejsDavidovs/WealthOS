@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 @MainActor
 @Suite("Backup & restore")

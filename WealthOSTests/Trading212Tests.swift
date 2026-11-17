@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 // MARK: - Test doubles (no live network is ever used)
 
@@ -40,17 +40,17 @@ final class T212MockHTTP: HTTPClient, @unchecked Sendable {
     }
 }
 
-final class SleepLog: @unchecked Sendable {
+nonisolated final class SleepLog: @unchecked Sendable {
     var values: [TimeInterval] = []
 }
 
-final class CallCounter: @unchecked Sendable {
+nonisolated final class CallCounter: @unchecked Sendable {
     var value = 0
     func next() -> Int { value += 1; return value }
 }
 
 /// Shapes follow https://docs.trading212.com/api (account summary, positions, instruments).
-enum T212Fixtures {
+nonisolated enum T212Fixtures {
     /// `totalValue` is deliberately absurd: WealthOS must never add the provider's own total.
     static let summary = #"{"cash":{"availableToTrade":250.50,"inPies":10,"reservedForOrders":4.5},"currency":"EUR","id":12345,"investments":{"currentValue":1500.118,"realizedProfitLoss":12.5,"totalCost":1262,"unrealizedProfitLoss":238.118},"totalValue":999999}"#
 

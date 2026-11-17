@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 // Regression tests for the second audit (NEW-001 … NEW-004). Isolated in-memory stores,
 // mocked HTTP (T212MockHTTP / BinanceMockHTTP) and mock secret stores (FlakySecrets) only.

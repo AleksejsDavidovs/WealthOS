@@ -111,6 +111,8 @@ struct CategoryEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // The preview sits on the background, outside any grouped row, so the Name field
+                // below is a standalone row with all four corners rounded and no separator.
                 Section {
                     HStack {
                         Spacer()
@@ -118,9 +120,16 @@ struct CategoryEditorView: View {
                         Spacer()
                     }
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                }
+                Section {
                     TextField("Name", text: $name)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                } footer: {
                     if isDuplicate {
-                        Text("A category with this name already exists.").font(.caption).foregroundStyle(Theme.negative)
+                        Text("A category with this name already exists.").foregroundStyle(Theme.negative)
                     }
                 }
                 Section("Color") { ColorSwatchPicker(selection: $colorName) }

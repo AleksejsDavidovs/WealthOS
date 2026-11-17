@@ -140,8 +140,14 @@ struct TransactionEditorView: View {
                 }
 
                 if !kindCategories.isEmpty {
-                    Section("Category") {
+                    Section {
                         CategoryGrid(categories: kindCategories, selection: $categoryID)
+                    } header: {
+                        Text("Category")
+                    } footer: {
+                        if let existing, BankReconciler.isBankImport(existing) {
+                            Text("Imported from your bank and categorized automatically. If you change it, WealthOS remembers your choice for this payee and applies it to their other and future transactions.")
+                        }
                     }
                 }
 
@@ -252,6 +258,7 @@ struct TransactionEditorView: View {
         let destinationID = kind == .transfer ? destinationAccountID : nil
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let oldCategoryID = existing?.categoryID
         do {
             // Balances are derived from records, so an edit replaces the old effect rather than
             // stacking on it. If saving fails, the edit is rolled back and no balance changes.
@@ -265,6 +272,7 @@ struct TransactionEditorView: View {
                     existing.categoryID = category
                     existing.date = date
                     existing.note = trimmedNote
+                    try BankCategoryLearning.learn(record: existing, oldCategoryID: oldCategoryID, in: context)
                 } else if isRecurring {
                     let isDue = date <= Calendar.current.startOfDay(for: .now).addingTimeInterval(86_399)
                     let rule = RecurringRule(kind: kind, amount: amount, destinationAmount: destinationAmount, accountID: accountID,

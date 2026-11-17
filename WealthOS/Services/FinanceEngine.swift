@@ -90,6 +90,24 @@ struct BinancePortfolio {
     var supersededHoldingIDs: Set<UUID> { Set(links.filter { $0.kind == .holding }.map(\.localID)) }
 }
 
+/// Bank accounts (Enable Banking) and the WealthOS accounts the user linked them to.
+struct BankPortfolio {
+    var links: [BankAccountLink]
+    var connections: [BankConnection]
+
+    static let empty = BankPortfolio(links: [], connections: [])
+
+    func link(for accountID: UUID) -> BankAccountLink? { links.first { $0.localAccountID == accountID } }
+
+    /// Linked, but the balance is last known rather than verified: restored from a backup, or
+    /// the consent is gone/expired so it can't be refreshed.
+    func isUnverified(_ link: BankAccountLink, now: Date) -> Bool {
+        if link.restoredFromBackup { return true }
+        guard let id = link.connectionID, let connection = connections.first(where: { $0.id == id }) else { return true }
+        return !connection.isUsable(now: now)
+    }
+}
+
 /// One cryptocurrency across all Binance wallets (Spot + Flexible + Locked), counted once.
 ///
 /// Only rows read in the latest successful sync are *confirmed* and counted. Rows kept from an
@@ -146,6 +164,11 @@ struct BrokerPositionValue: Identifiable {
 ///   Unpriced assets are listed but excluded from totals (never valued at zero). Cost basis is
 ///   unknown, so Binance never contributes to cost basis or profit. Linked ("Counted via
 ///   Binance") manual records are excluded like Trading 212 links.
+/// - Banks: an account the user linked to a bank account takes the last *confirmed* booked bank
+///   balance as its balance (instead of opening balance + ledger), so it is counted exactly once.
+///   Imported bank transactions are ordinary ledger records: they drive income/expense
+///   statistics, and transfers move money to/from other accounts as usual. Without a confirmed
+///   bank balance yet, the ledger balance is used. A failed sync never changes the balance.
 struct FinanceEngine {
     let accounts: [Account]
     let transactions: [TransactionRecord]
@@ -158,8 +181,13 @@ struct FinanceEngine {
     let brokerCashBase: Decimal?
     let binance: BinancePortfolio
     let binanceAssets: [BinanceAssetValue]
+    let bank: BankPortfolio
 
     let balances: [UUID: Decimal]
+    /// Opening balance + ledger for every account, even where a bank balance is used instead.
+    let ledgerBalances: [UUID: Decimal]
+    /// Accounts whose `balances` value is a confirmed bank balance.
+    let bankBalanceAccountIDs: Set<UUID>
     let accountsByID: [UUID: Account]
     let positions: [PositionSummary]
     let summary: NetWorthSummary
@@ -172,8 +200,10 @@ struct FinanceEngine {
     ///   do not affect current balances until their date arrives.
     init(accounts: [Account], transactions: [TransactionRecord], holdings: [Holding],
          trades: [InvestmentTrade], converter: CurrencyConverter, broker: BrokerPortfolio = .empty,
-         binance: BinancePortfolio = .empty, now: Date = .now, calendar: Calendar = .current) {
+         binance: BinancePortfolio = .empty, bank: BankPortfolio = .empty, now: Date = .now,
+         calendar: Calendar = .current) {
         self.accounts = accounts
+        self.bank = bank
         self.transactions = transactions
         self.holdings = holdings
         self.trades = trades
@@ -192,8 +222,20 @@ struct FinanceEngine {
         self.asOfDate = endOfToday
         self.scheduledCount = transactions.lazy.filter { $0.date > endOfToday }.count
             + trades.lazy.filter { $0.date > endOfToday }.count
-        let balances = Self.computeBalances(accounts: accounts, transactions: transactions, trades: trades, asOf: endOfToday)
+        let ledgerBalances = Self.computeBalances(accounts: accounts, transactions: transactions, trades: trades, asOf: endOfToday)
+        self.ledgerBalances = ledgerBalances
+        var balances = ledgerBalances
+        var bankBalanceAccountIDs: Set<UUID> = []
+        var unverifiedBanks: Set<String> = []
+        for link in bank.links {
+            guard let id = link.localAccountID, let account = byID[id], let amount = link.balanceAmount,
+                  link.accepts(account.currencyCode), !bankBalanceAccountIDs.contains(id) else { continue }
+            balances[id] = amount
+            bankBalanceAccountIDs.insert(id)
+            if bank.isUnverified(link, now: now) { unverifiedBanks.insert(link.aspspName.isEmpty ? "Bank" : link.aspspName) }
+        }
         self.balances = balances
+        self.bankBalanceAccountIDs = bankBalanceAccountIDs
         let positions = Self.computePositions(holdings: holdings, trades: trades, converter: converter, asOf: endOfToday)
         self.positions = positions
         let supersededAccounts = broker.supersededAccountIDs.union(binance.supersededAccountIDs)
@@ -226,6 +268,7 @@ struct FinanceEngine {
         // Restored provider data is the last known state at backup time, not a verified balance.
         if broker.snapshot?.restoredFromBackup == true { summary.incompleteSources.insert("Trading 212") }
         if binance.snapshot?.restoredFromBackup == true { summary.incompleteSources.insert("Binance") }
+        summary.incompleteSources.formUnion(unverifiedBanks)
         self.summary = summary
     }
 
@@ -369,6 +412,14 @@ struct FinanceEngine {
     }
 
     func balance(of account: Account) -> Decimal { balances[account.id] ?? account.openingBalance }
+
+    /// Opening balance + ledger, ignoring any bank balance (for reconciliation views).
+    func ledgerBalance(of account: Account) -> Decimal { ledgerBalances[account.id] ?? account.openingBalance }
+
+    /// The bank link whose confirmed balance this account shows, if any.
+    func bankLink(for account: Account) -> BankAccountLink? {
+        bankBalanceAccountIDs.contains(account.id) ? bank.link(for: account.id) : nil
+    }
 
     func balanceInBase(of account: Account) -> Decimal? {
         converter.toBase(balance(of: account), from: account.currencyCode)

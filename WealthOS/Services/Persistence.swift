@@ -9,7 +9,8 @@ enum Persistence {
         Holding.self, InvestmentTrade.self, PricePoint.self, CurrencyRate.self,
         NetWorthSnapshot.self, Goal.self, SimulationScenario.self, MarketQuote.self,
         BrokerAccountSnapshot.self, BrokerPosition.self, BrokerLink.self,
-        BinanceAccountSnapshot.self, BinanceHolding.self, BinanceLink.self
+        BinanceAccountSnapshot.self, BinanceHolding.self, BinanceLink.self,
+        BankConnection.self, BankAccountLink.self, BankTransaction.self, BankCounterpartyRule.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }

@@ -134,7 +134,12 @@ struct MainTabView: View {
         guard !app.isDemoMode, let real = app.persistentContainer?.mainContext else { return }
         if trading212.isConnected { Task { await trading212.syncIfStale(context: real) } }
         if binance.isConnected { Task { await binance.syncIfStale(context: real) } }
+        // Banks: stale-only (6 h) because PSD2 limits unattended access per day.
+        banking.reloadConnectionState()
+        if banking.isConfigured { Task { await banking.syncIfStale(context: real) } }
     }
+
+    @Environment(BankingService.self) private var banking
 
     /// Respects each provider's cache TTL, so frequent app switches don't cause requests.
     private func autoRefreshMarketData() async {

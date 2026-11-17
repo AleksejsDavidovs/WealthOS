@@ -120,7 +120,44 @@ enum BackupService {
                       pricedAt: $0.pricedAt, syncedAt: $0.syncedAt)
             },
             links: binanceLinks)
-        return (t212 == nil && binance == nil) ? nil : .init(trading212: t212, binance: binance)
+        let banking = try bankingPayload(from: context)
+        return (t212 == nil && binance == nil && banking == nil) ? nil : .init(trading212: t212, binance: binance, banking: banking)
+    }
+
+    /// Bank reconciliation metadata. Consents, backend connection ids, Enable Banking account
+    /// uids and the client secret are device-local and deliberately left out.
+    static func bankingPayload(from context: ModelContext) throws -> BackupPayload.BankingDTO? {
+        let accountIDs = Set(try context.fetch(FetchDescriptor<Account>()).map(\.id))
+        let recordIDs = Set(try context.fetch(FetchDescriptor<TransactionRecord>()).map(\.id))
+        let links = try context.fetch(FetchDescriptor<BankAccountLink>())
+        let rows = try context.fetch(FetchDescriptor<BankTransaction>()).filter { $0.status == .booked && $0.resolution != .pending }
+        let rules = try context.fetch(FetchDescriptor<BankCounterpartyRule>())
+        guard !links.isEmpty || !rows.isEmpty || !rules.isEmpty else { return nil }
+        return .init(
+            links: links.map {
+                .init(accountKey: $0.accountKey, aspspName: $0.aspspName, aspspCountry: $0.aspspCountry,
+                      localAccountID: $0.localAccountID.flatMap { accountIDs.contains($0) ? $0 : nil },
+                      displayName: $0.displayName, maskedIdentifier: $0.maskedIdentifier, currencyCode: $0.currencyCode,
+                      cashAccountType: $0.cashAccountType, product: $0.product, creditLimit: $0.creditLimit,
+                      balanceAmount: $0.balanceAmount, balanceType: $0.balanceTypeRaw, balanceReferenceDate: $0.balanceReferenceDate,
+                      lastSuccessfulSyncAt: $0.lastSuccessfulSyncAt, importStartDate: $0.importStartDate, createdAt: $0.createdAt)
+            },
+            transactions: rows.map {
+                .init(key: $0.key, accountKey: $0.accountKey, identityKind: $0.identityKind,
+                      providerTransactionID: $0.providerTransactionID, entryReference: $0.entryReference, amount: $0.amount,
+                      currencyCode: $0.currencyCode, directionKnown: $0.directionKnown, bookingDate: $0.bookingDate,
+                      valueDate: $0.valueDate, transactionDate: $0.transactionDate, counterpartyName: $0.counterpartyName,
+                      counterpartyAccountHash: $0.counterpartyAccountHash, counterpartyAccountMasked: $0.counterpartyAccountMasked,
+                      remittance: $0.remittance, referenceNumber: $0.referenceNumber, bankTransactionCode: $0.bankTransactionCode,
+                      merchantCategoryCode: $0.merchantCategoryCode, contentHash: $0.contentHash,
+                      bankDataChanged: $0.bankDataChanged, resolution: $0.resolutionRaw, reviewReason: $0.reviewReasonRaw,
+                      ledgerRecordID: $0.ledgerRecordID.flatMap { recordIDs.contains($0) ? $0 : nil },
+                      candidateRecordIDs: $0.candidateRecordIDs, firstSeenAt: $0.firstSeenAt, lastSeenAt: $0.lastSeenAt)
+            },
+            rules: rules.map {
+                .init(matchKey: $0.matchKey, direction: $0.direction, action: $0.actionRaw, categoryID: $0.categoryID,
+                      otherAccountID: $0.otherAccountID, label: $0.label, createdAt: $0.createdAt)
+            })
     }
 
     /// Encodes and encrypts the database. Returns the encrypted bytes.
@@ -184,15 +221,103 @@ enum BackupService {
         context.autosaveEnabled = false
         defer { context.autosaveEnabled = wasAutosaving }
         do {
+            // Bank consents belong to this device, not to the data: keep them, and re-attach
+            // restored accounts to them by their stable account key.
+            let consents = try currentBankConsents(in: context)
             try LedgerService.deleteAllData(in: context)
             try Trading212Reconciler.removeAllData(in: context)
             try BinanceReconciler.removeAllData(in: context)
+            for row in try context.fetch(FetchDescriptor<BankAccountLink>()) { context.delete(row) }
+            for row in try context.fetch(FetchDescriptor<BankTransaction>()) { context.delete(row) }
+            for row in try context.fetch(FetchDescriptor<BankCounterpartyRule>()) { context.delete(row) }
             insert(payload, into: context)
             insertExternal(payload, into: context)
+            insertBanking(payload, consents: consents, into: context)
             try save(context)
         } catch {
             context.rollback()
             throw error
+        }
+    }
+
+    typealias BankConsent = (connectionID: UUID, providerAccountUID: String)
+
+    static func currentBankConsents(in context: ModelContext) throws -> [String: BankConsent] {
+        let connections = Set(try context.fetch(FetchDescriptor<BankConnection>()).map(\.id))
+        var result: [String: BankConsent] = [:]
+        for link in try context.fetch(FetchDescriptor<BankAccountLink>()) {
+            if let id = link.connectionID, connections.contains(id), !link.providerAccountUID.isEmpty {
+                result[link.accountKey] = (id, link.providerAccountUID)
+            }
+        }
+        return result
+    }
+
+    /// Restored balances are flagged unverified until the next successful sync. Provenance rows
+    /// keep "already imported" decisions even if their ledger record no longer exists, so a sync
+    /// after restore never re-imports a transaction the user had deleted.
+    static func insertBanking(_ payload: BackupPayload, consents: [String: BankConsent], into context: ModelContext) {
+        guard let banking = payload.external?.banking else { return }
+        let accountIDs = Set(payload.accounts.map(\.id))
+        let recordIDs = Set(payload.transactions.map(\.id))
+        let categoryIDs = Set(payload.categories.map(\.id))
+        for l in banking.links {
+            let link = BankAccountLink(accountKey: l.accountKey, aspspName: l.aspspName, aspspCountry: l.aspspCountry,
+                                       createdAt: l.createdAt)
+            link.localAccountID = l.localAccountID.flatMap { accountIDs.contains($0) ? $0 : nil }
+            link.displayName = l.displayName
+            link.maskedIdentifier = l.maskedIdentifier
+            link.currencyCode = l.currencyCode
+            link.cashAccountType = l.cashAccountType
+            link.product = l.product
+            link.creditLimit = l.creditLimit
+            link.balanceAmount = l.balanceAmount
+            link.balanceTypeRaw = l.balanceType
+            link.balanceReferenceDate = l.balanceReferenceDate
+            link.lastSuccessfulSyncAt = l.lastSuccessfulSyncAt
+            link.importStartDate = l.importStartDate
+            link.restoredFromBackup = true
+            if let consent = consents[l.accountKey] {
+                link.connectionID = consent.connectionID
+                link.providerAccountUID = consent.providerAccountUID
+            }
+            context.insert(link)
+        }
+        for e in banking.transactions {
+            let row = BankTransaction(key: e.key, accountKey: e.accountKey, firstSeenAt: e.firstSeenAt)
+            row.identityKind = e.identityKind
+            row.providerTransactionID = e.providerTransactionID
+            row.entryReference = e.entryReference
+            row.statusRaw = BankEntryStatus.booked.rawValue
+            row.amount = e.amount
+            row.currencyCode = e.currencyCode
+            row.directionKnown = e.directionKnown
+            row.bookingDate = e.bookingDate
+            row.valueDate = e.valueDate
+            row.transactionDate = e.transactionDate
+            row.counterpartyName = e.counterpartyName
+            row.counterpartyAccountHash = e.counterpartyAccountHash
+            row.counterpartyAccountMasked = e.counterpartyAccountMasked
+            row.remittance = e.remittance
+            row.referenceNumber = e.referenceNumber
+            row.bankTransactionCode = e.bankTransactionCode
+            row.merchantCategoryCode = e.merchantCategoryCode
+            row.contentHash = e.contentHash
+            row.bankDataChanged = e.bankDataChanged
+            row.resolutionRaw = e.resolution
+            row.reviewReasonRaw = e.reviewReason
+            row.ledgerRecordID = e.ledgerRecordID.flatMap { recordIDs.contains($0) ? $0 : nil }
+            row.candidateRecordIDs = e.candidateRecordIDs.split(separator: ",")
+                .filter { UUID(uuidString: String($0)).map(recordIDs.contains) ?? false }.joined(separator: ",")
+            row.lastSeenAt = e.lastSeenAt
+            context.insert(row)
+        }
+        for r in banking.rules {
+            guard let action = BankRuleAction(rawValue: r.action) else { continue }
+            context.insert(BankCounterpartyRule(matchKey: r.matchKey, direction: r.direction, action: action,
+                                                categoryID: r.categoryID.flatMap { categoryIDs.contains($0) ? $0 : nil },
+                                                otherAccountID: r.otherAccountID.flatMap { accountIDs.contains($0) ? $0 : nil },
+                                                label: r.label, createdAt: r.createdAt))
         }
     }
 

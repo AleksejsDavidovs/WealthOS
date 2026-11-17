@@ -52,6 +52,8 @@ Exports/
 # Secrets and credentials
 .env
 .env.*
+!.env.example
+!**/.env.example
 *.pem
 *.p12
 *.key
@@ -63,6 +65,31 @@ Secrets.xcconfig
 *.secret
 credentials.json
 GoogleService-Info.plist
+
+*.p8
+*.cer
+*.crt
+*.der
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+backend/secrets/
+backend/keys/
+
+# Python (backend)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
 
 # Editors / tooling
 .vscode/

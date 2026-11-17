@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 // MARK: - Test doubles (no live network is ever used)
 
@@ -32,7 +32,7 @@ final class BinanceMockHTTP: HTTPClient, @unchecked Sendable {
 
 /// Shapes follow https://developers.binance.com/docs (account, apiRestrictions, Simple Earn
 /// positions, exchangeInfo, ticker/price). Amounts are decimal strings, as Binance sends them.
-enum BinanceFixtures {
+nonisolated enum BinanceFixtures {
     static let readOnlyKey = #"{"ipRestrict":false,"createTime":1623840271000,"enableReading":true,"enableWithdrawals":false,"enableInternalTransfer":false,"enableMargin":false,"enableFutures":false,"permitsUniversalTransfer":false,"enableVanillaOptions":false,"enableFixApiTrade":false,"enableFixReadOnly":true,"enableSpotAndMarginTrading":false,"enablePortfolioMarginTrading":false}"#
     static let withdrawalKey = #"{"ipRestrict":false,"enableReading":true,"enableWithdrawals":true,"enableInternalTransfer":true,"enableSpotAndMarginTrading":true,"permitsUniversalTransfer":false}"#
     static let noReadKey = #"{"ipRestrict":false,"enableReading":false}"#

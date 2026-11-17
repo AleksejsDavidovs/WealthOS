@@ -6,6 +6,7 @@ import SwiftUI
     @State private var marketData = MarketDataService()
     @State private var trading212 = Trading212Service.makeForApp()
     @State private var binance = BinanceService.makeForApp()
+    @State private var banking = BankingService.makeForApp()
 
     init() {
         // Online prices stay off until the user enables them; when enabled, refresh on open.
@@ -20,6 +21,7 @@ import SwiftUI
                 .environment(marketData)
                 .environment(trading212)
                 .environment(binance)
+                .environment(banking)
         }
     }
 }

@@ -3,7 +3,7 @@ import LocalAuthentication
 import SwiftUI
 import Testing
 import UIKit
-@testable import MyApp
+@testable import WealthOS
 
 // MARK: - Test doubles (no real Face ID or real Keychain item is ever touched)
 
@@ -41,13 +41,22 @@ final class FailingSecrets: SecretStore, @unchecked Sendable {
 }
 
 enum AppLockTestSupport {
-    /// `isLockEnabled` reads a shared `UserDefaults.standard` key (in the simulator's test-host
-    /// container, never the device). The previous value is always restored.
+    /// Throwaway preferences suite used by every `AppLockManager` in tests, so a test run can
+    /// never change the app's real `UserDefaults.standard` lock setting, even if it crashes.
+    nonisolated(unsafe) static let defaults: UserDefaults = {  // UserDefaults is documented thread-safe
+        let name = "WealthOSTests.AppLock"
+        let suite = UserDefaults(suiteName: name)!
+        suite.removePersistentDomain(forName: name)
+        return suite
+    }()
+
+    /// Runs `body` with the test suite's lock preference set to `enabled`; the previous value is
+    /// always restored.
     @MainActor
     static func withLockEnabled(_ enabled: Bool, _ body: () async throws -> Void) async rethrows {
-        let previous = UserDefaults.standard.bool(forKey: SettingsKey.lockEnabled)
-        UserDefaults.standard.set(enabled, forKey: SettingsKey.lockEnabled)
-        defer { UserDefaults.standard.set(previous, forKey: SettingsKey.lockEnabled) }
+        let previous = defaults.bool(forKey: SettingsKey.lockEnabled)
+        defaults.set(enabled, forKey: SettingsKey.lockEnabled)
+        defer { defaults.set(previous, forKey: SettingsKey.lockEnabled) }
         try await body()
     }
 
@@ -55,7 +64,7 @@ enum AppLockTestSupport {
     static func lockedManager(_ bio: MockBiometricAuthenticator, pin: String? = nil) throws -> AppLockManager {
         let pinManager = AppPINManager(store: MemorySecrets())
         if let pin { try pinManager.enroll(pin) }
-        let lock = AppLockManager(biometrics: bio, pin: pinManager)
+        let lock = AppLockManager(biometrics: bio, pin: pinManager, defaults: AppLockTestSupport.defaults)
         lock.isLocked = true
         return lock
     }
@@ -153,7 +162,7 @@ struct AppLockAutomaticAuthTests {
     }
 
     @Test func lockIfEnabledDoesNothingWhenLockIsOff() async {
-        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: MemorySecrets()))
+        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: MemorySecrets()), defaults: AppLockTestSupport.defaults)
         lock.isLocked = false
         await AppLockTestSupport.withLockEnabled(false) {
             lock.lockIfEnabled()
@@ -349,7 +358,7 @@ struct AppLockPINFallbackTests {
         try pin.enroll("778899")
         var clock = Date(timeIntervalSince1970: 1_800_000_000)
         for _ in 0..<AppPINManager.maxTotalFailures { _ = pin.verify("000000", now: clock); clock.addTimeInterval(3_600) }
-        let lock = AppLockManager(biometrics: bio, pin: pin)
+        let lock = AppLockManager(biometrics: bio, pin: pin, defaults: AppLockTestSupport.defaults)
         lock.isLocked = true
 
         _ = await lock.authenticate()
@@ -376,7 +385,7 @@ struct AppLockPINFallbackTests {
 @Suite("App lock — security settings require re-authentication", .serialized)
 struct AppLockAuthorizationTests {
     @Test func pinEnabledFlagIsObservableAcrossEnrollAndDisable() async throws {
-        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: MemorySecrets()))
+        let lock = AppLockManager(biometrics: MockBiometricAuthenticator(), pin: AppPINManager(store: MemorySecrets()), defaults: AppLockTestSupport.defaults)
         #expect(lock.isPINEnabled == false)
         try await lock.enrollPIN("135790")
         #expect(lock.isPINEnabled == true)
@@ -387,7 +396,7 @@ struct AppLockAuthorizationTests {
     @Test func reauthorizeFailsWhenOwnerCancels() async {
         let bio = MockBiometricAuthenticator()
         bio.evaluateResult = .failure(LAError(.userCancel))
-        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()))
+        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()), defaults: AppLockTestSupport.defaults)
 
         #expect(await lock.reauthorize(reason: "test") == false)
         #expect(bio.prompts.last?.policy == .deviceOwnerAuthentication)
@@ -396,7 +405,7 @@ struct AppLockAuthorizationTests {
     @Test func turningTheLockOffRequiresAuthentication() async {
         let bio = MockBiometricAuthenticator()
         bio.evaluateResult = .failure(LAError(.userCancel))
-        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()))
+        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()), defaults: AppLockTestSupport.defaults)
 
         await AppLockTestSupport.withLockEnabled(true) {
             let changed = await lock.setLockEnabled(false)
@@ -408,7 +417,7 @@ struct AppLockAuthorizationTests {
     @Test func turningTheLockOnRequiresAuthentication() async {
         let bio = MockBiometricAuthenticator()
         bio.evaluateResult = .failure(LAError(.authenticationFailed))
-        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()))
+        let lock = AppLockManager(biometrics: bio, pin: AppPINManager(store: MemorySecrets()), defaults: AppLockTestSupport.defaults)
 
         await AppLockTestSupport.withLockEnabled(false) {
             #expect(await lock.setLockEnabled(true) == false)

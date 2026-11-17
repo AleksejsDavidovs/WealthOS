@@ -79,6 +79,35 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     struct ExternalDTO: Codable, Equatable, Sendable {
         var trading212: Trading212DTO?
         var binance: BinanceDTO?
+        /// Bank reconciliation metadata (optional; absent in backups from before bank support).
+        /// Never contains consents, Enable Banking session/account ids or backend credentials.
+        var banking: BankingDTO? = nil
+    }
+    struct BankingDTO: Codable, Equatable, Sendable {
+        var links: [BankLinkDTO]
+        /// Booked provenance rows only. They are what keeps a restored ledger from importing the
+        /// same bank transactions a second time.
+        var transactions: [BankEntryDTO]
+        var rules: [BankRuleDTO]
+    }
+    struct BankLinkDTO: Codable, Equatable, Sendable {
+        var accountKey: String, aspspName: String, aspspCountry: String, localAccountID: UUID?
+        var displayName: String, maskedIdentifier: String, currencyCode: String, cashAccountType: String, product: String
+        var creditLimit: Decimal?, balanceAmount: Decimal?, balanceType: String, balanceReferenceDate: Date?
+        var lastSuccessfulSyncAt: Date?, importStartDate: Date?, createdAt: Date
+    }
+    struct BankEntryDTO: Codable, Equatable, Sendable {
+        var key: String, accountKey: String, identityKind: String, providerTransactionID: String, entryReference: String
+        var amount: Decimal, currencyCode: String, directionKnown: Bool
+        var bookingDate: Date?, valueDate: Date?, transactionDate: Date?
+        var counterpartyName: String, counterpartyAccountHash: String, counterpartyAccountMasked: String
+        var remittance: String, referenceNumber: String, bankTransactionCode: String, merchantCategoryCode: String
+        var contentHash: String, bankDataChanged: Bool, resolution: String, reviewReason: String
+        var ledgerRecordID: UUID?, candidateRecordIDs: String, firstSeenAt: Date, lastSeenAt: Date
+    }
+    struct BankRuleDTO: Codable, Equatable, Sendable {
+        var matchKey: String, direction: String, action: String, categoryID: UUID?, otherAccountID: UUID?
+        var label: String, createdAt: Date
     }
     struct LinkDTO: Codable, Equatable, Sendable {
         var kind: String, localID: UUID, createdAt: Date
@@ -257,6 +286,27 @@ nonisolated extension BackupPayload {
                 throw BackupValidationError.brokenReference("Binance balances without an account snapshot")
             }
             try links(binance.links)
+        }
+        if let banking = external.banking {
+            if Set(banking.links.map(\.accountKey)).count != banking.links.count {
+                throw BackupValidationError.duplicateIdentifiers("bank account link")
+            }
+            if Set(banking.transactions.map(\.key)).count != banking.transactions.count {
+                throw BackupValidationError.duplicateIdentifiers("bank transaction")
+            }
+            let linkedLocal = banking.links.compactMap(\.localAccountID)
+            if Set(linkedLocal).count != linkedLocal.count {
+                throw BackupValidationError.invalidValue("two bank accounts linked to one account")
+            }
+            for entry in banking.transactions {
+                guard let resolution = BankTransactionResolution(rawValue: entry.resolution), resolution != .pending,
+                      !entry.key.isEmpty, entry.key.hasPrefix(entry.accountKey + "|") else {
+                    throw BackupValidationError.invalidValue("bank transaction")
+                }
+            }
+            for rule in banking.rules where BankRuleAction(rawValue: rule.action) == nil || !["in", "out"].contains(rule.direction) {
+                throw BackupValidationError.invalidValue("bank rule")
+            }
         }
     }
 }

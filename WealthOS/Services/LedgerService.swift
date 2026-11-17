@@ -113,6 +113,11 @@ enum LedgerService {
         for holding in try context.fetch(FetchDescriptor<Holding>()) where holding.accountID == id {
             holding.accountID = nil
         }
+        // The bank account stays known (and its import history keeps preventing duplicates);
+        // it is simply no longer counted as anything.
+        for link in try context.fetch(FetchDescriptor<BankAccountLink>()) where link.localAccountID == id {
+            link.localAccountID = nil
+        }
         context.delete(account)
         try context.save()
     }

@@ -3,7 +3,7 @@ import SwiftData
 import SwiftUI
 import Testing
 import UIKit
-@testable import MyApp
+@testable import WealthOS
 
 /// Every screen derives its figures from the same `FinanceEngine`; these tests check that
 /// each mutation moves *all* dependent values together and by the financially correct amount.

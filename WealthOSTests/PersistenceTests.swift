@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import MyApp
+@testable import WealthOS
 
 /// Disk-backed tests: real SQLite stores in a temporary directory, closed and reopened.
 @MainActor
