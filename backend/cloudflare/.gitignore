@@ -1,0 +1,15 @@
+# Local secrets for `wrangler dev` — never commit.
+.dev.vars
+.dev.vars.*
+.env*
+# Generated
+python_modules/
+node_modules/
+.wrangler/
+.venv-workers/
+.venv/
+pylock.toml
+# Copied from ../app by sync_app.sh
+src/app/
+# Your deployment values (workers.dev subdomain, D1 ids): local only
+wrangler.local.jsonc

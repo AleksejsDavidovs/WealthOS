@@ -1,0 +1,8 @@
+{
+  "name": "wealthos-banking-worker",
+  "private": true,
+  "description": "Pins the wrangler CLI used to run and deploy the banking Worker.",
+  "devDependencies": {
+    "wrangler": "4.163.0"
+  }
+}
