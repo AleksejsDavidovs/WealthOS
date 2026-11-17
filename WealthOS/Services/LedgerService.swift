@@ -227,6 +227,7 @@ enum LedgerService {
         for item in try context.fetch(FetchDescriptor<MarketQuote>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<Budget>()) { context.delete(item) }
         for item in try context.fetch(FetchDescriptor<SubscriptionDecision>()) { context.delete(item) }
+        for item in try context.fetch(FetchDescriptor<PortfolioSnapshot>()) { context.delete(item) }
     }
 }
 
@@ -260,6 +261,36 @@ enum RecurringService {
 }
 
 enum SnapshotService {
+    /// One portfolio point per day (updated in place while the day lasts), for performance
+    /// history. Skipped while valuations are incomplete, like the net worth snapshot.
+    @discardableResult
+    static func recordPortfolioSnapshot(engine: FinanceEngine, currencyCode: String, in context: ModelContext,
+                                        now: Date = .now, calendar: Calendar = .current) -> Bool {
+        guard engine.hasAnyPositions, engine.summary.isComplete else { return false }
+        let start = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return false }
+        let existing = (try? context.fetch(FetchDescriptor<PortfolioSnapshot>(predicate: #Predicate {
+            $0.date >= start && $0.date < end
+        }))) ?? []
+        let values = (total: engine.portfolioMarketValue, costed: engine.portfolioCostedValue,
+                      cost: engine.portfolioCostBasis, realized: engine.portfolioRealized)
+        if let today = existing.first(where: { $0.currencyCode == currencyCode }) {
+            guard today.totalValue != values.total || today.costedValue != values.costed || today.costBasis != values.cost
+                    || today.realized != values.realized else { return false }
+            today.date = now
+            today.totalValue = values.total
+            today.costedValue = values.costed
+            today.costBasis = values.cost
+            today.realized = values.realized
+        } else {
+            for stale in existing { context.delete(stale) }
+            context.insert(PortfolioSnapshot(date: now, currencyCode: currencyCode, totalValue: values.total,
+                                             costedValue: values.costed, costBasis: values.cost, realized: values.realized))
+        }
+        try? context.save()
+        return true
+    }
+
     enum AutomaticSnapshotOutcome: Equatable {
         case recorded, unchanged, noData
         /// Totals were incomplete or unverified (missing FX rate, unreadable Earn product,

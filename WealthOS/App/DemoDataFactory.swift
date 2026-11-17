@@ -114,6 +114,26 @@ enum DemoDataFactory {
                                             currencyCode: "EUR", note: offset == 8 ? "From bank statements" : ""))
         }
 
+        // Weekly portfolio history for the performance chart (demo only), ending at today's values.
+        let engineNow = DataMaintenance.makeEngine(context: context, baseCurrency: "EUR")
+        let finalCost = engineNow.portfolioCostBasis, finalValue = engineNow.portfolioCostedValue
+        var weeks = 34
+        #if DEBUG
+        // Development aid: `-UIDemoNoHistory` shows the portfolio as on a first day (no history yet).
+        if ProcessInfo.processInfo.arguments.contains("-UIDemoNoHistory") { weeks = -1 }
+        #endif
+        for week in stride(from: 0, through: weeks, by: 1) {
+            guard let date = calendar.date(byAdding: .day, value: -7 * (weeks - week), to: now) else { continue }
+            let progress = Decimal(week) / Decimal(weeks)
+            let funded: Decimal = week < 4 ? Decimal(string: "0.38")! : week < 9 ? Decimal(string: "0.56")! : week < 13 ? Decimal(string: "0.74")!
+                : week < 26 ? Decimal(string: "0.88")! : 1
+            let cost = Money.round(finalCost * funded)
+            let wobble = Decimal(Int(generator.next() % 7) - 3) / 100
+            let value = week == weeks ? finalValue : Money.round(cost * (1 + (finalValue / max(finalCost, 1) - 1) * progress + wobble))
+            context.insert(PortfolioSnapshot(date: date, currencyCode: "EUR", totalValue: value, costedValue: value,
+                                             costBasis: cost, realized: 0))
+        }
+
         context.insert(Goal(name: "Emergency Fund", type: .emergencyFund, targetAmount: 15_000,
                             targetDate: calendar.date(byAdding: .month, value: 10, to: now), allocatedAmount: 9_000,
                             monthlyContribution: 400))

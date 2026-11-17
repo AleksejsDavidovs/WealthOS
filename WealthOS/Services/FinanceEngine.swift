@@ -468,6 +468,12 @@ struct FinanceEngine {
         countedPositions.compactMap(\.marketValueBase).reduce(0, +) + brokerPositions.compactMap(\.valueBase).reduce(0, +)
             + binanceTotalBase
     }
+    /// Market value of the positions whose cost basis is known — the value `portfolioCostBasis`
+    /// and `portfolioUnrealized` describe. Excludes Binance.
+    var portfolioCostedValue: Decimal {
+        countedPositions.filter { $0.costBasisBase != nil }.compactMap(\.marketValueBase).reduce(0, +)
+            + brokerPositions.filter { $0.costBase != nil }.compactMap(\.valueBase).reduce(0, +)
+    }
     /// Unrealized P/L over positions where it can be determined (never Binance: no cost basis).
     var portfolioUnrealized: Decimal {
         countedPositions.compactMap(\.unrealizedProfitBase).reduce(0, +) + brokerPositions.compactMap(\.unrealizedBase).reduce(0, +)

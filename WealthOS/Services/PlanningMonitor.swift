@@ -100,11 +100,18 @@ enum PlanningMonitor {
         return at
     }
 
+    /// 10:00 on the first day of next month: when last month's report is ready.
+    static func reportDate(now: Date = .now, calendar: Calendar = .current) -> Date? {
+        guard let thisMonth = calendar.dateInterval(of: .month, for: now) else { return nil }
+        return calendar.date(bySettingHour: 10, minute: 0, second: 0, of: thisMonth.end)
+    }
+
     /// Runs after data changes (see `DataMaintenance.refreshSnapshot`), on the real store only.
     static func run(context: ModelContext, engine: FinanceEngine, now: Date = .now, defaults: UserDefaults = .standard) {
         let budgetAlerts = defaults.bool(forKey: SettingsKey.budgetAlerts)
         let reminders = defaults.bool(forKey: SettingsKey.subscriptionReminders)
-        guard budgetAlerts || reminders else { return }
+        let report = defaults.bool(forKey: SettingsKey.monthlyReportNotification)
+        guard budgetAlerts || reminders || report else { return }
         var posts: [(id: String, title: String, body: String, at: Date?)] = []
 
         if budgetAlerts, let budgets = try? context.fetch(FetchDescriptor<Budget>()), !budgets.isEmpty {
@@ -123,9 +130,20 @@ enum PlanningMonitor {
             }
             : []
 
+        var reportPost: (id: String, title: String, body: String, at: Date?)?
+        if report, let at = reportDate(now: now) {
+            let month = Calendar.current.date(byAdding: .month, value: -1, to: at) ?? now
+            reportPost = ("report.\(BudgetMath.monthKey(month))", "Monthly report",
+                          "Your \(month.formatted(.dateTime.month(.wide))) report is ready.", at)
+        }
+
         let notifier = self.notifier
         Task {
             if reminders { await notifier.removePending(prefix: "sub.") }
+            if let reportPost {
+                await notifier.removePending(prefix: "report.")
+                await notifier.post(id: reportPost.id, title: reportPost.title, body: reportPost.body, at: reportPost.at)
+            }
             for item in posts + schedule { await notifier.post(id: item.id, title: item.title, body: item.body, at: item.at) }
         }
     }

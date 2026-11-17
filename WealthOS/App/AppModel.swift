@@ -120,6 +120,7 @@ enum DataMaintenance {
         if !Persistence.isHostingTests(), context.container.configurations.contains(where: { !$0.isStoredInMemoryOnly }) {
             PlanningMonitor.run(context: context, engine: engine)
         }
+        SnapshotService.recordPortfolioSnapshot(engine: engine, currencyCode: baseCurrency, in: context)
         return SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
                                                 hasData: !engine.accounts.isEmpty || !engine.holdings.isEmpty
                                                     || engine.broker.snapshot != nil || engine.binance.snapshot != nil,

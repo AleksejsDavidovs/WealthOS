@@ -189,7 +189,8 @@ struct PlanningMigrationTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "WealthOS.store")
-        let newTypes: Set<ObjectIdentifier> = [ObjectIdentifier(Budget.self), ObjectIdentifier(SubscriptionDecision.self)]
+        let newTypes: Set<ObjectIdentifier> = [ObjectIdentifier(Budget.self), ObjectIdentifier(SubscriptionDecision.self),
+                                               ObjectIdentifier(PortfolioSnapshot.self)]
         do {
             // The schema exactly as it was before budgets: every current model except the two new ones.
             let previous = Schema(Persistence.modelTypes.filter { !newTypes.contains(ObjectIdentifier($0)) })
@@ -214,7 +215,9 @@ struct PlanningMigrationTests {
         #expect(try context.fetchCount(FetchDescriptor<BankCounterpartyRule>()) == 1)
         context.insert(Budget(categoryID: nil, amount: 500))
         context.insert(SubscriptionDecision(key: "note:x", status: .dismissed))
+        context.insert(PortfolioSnapshot(date: .now, currencyCode: "EUR", totalValue: 10, costedValue: 10, costBasis: 8, realized: 0))
         try context.save()
+        #expect(try context.fetchCount(FetchDescriptor<PortfolioSnapshot>()) == 1)
         #expect(try context.fetchCount(FetchDescriptor<Budget>()) == 1)
     }
 }

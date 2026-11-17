@@ -32,6 +32,7 @@ struct HomeView: View {
                         if app.isDemoMode { DemoBanner() }
                         NetWorthHeroCard(summary: engine.summary, snapshots: baseSnapshots, code: baseCurrency)
                         if !engine.accounts.isEmpty { QuickActionsRow() }
+                        MonthlyReportBanner(engine: engine)
                         if !engine.summary.missingRateCurrencies.isEmpty {
                             InfoBanner(text: "Missing exchange rate for \(engine.summary.missingRateCurrencies.sorted().joined(separator: ", ")). Those balances are excluded from totals until you add a rate in Settings.",
                                        symbol: "exclamationmark.triangle.fill", tint: .orange)

@@ -517,3 +517,33 @@ final class SubscriptionDecision {
         set { statusRaw = newValue.rawValue }
     }
 }
+
+/// Daily record of the investment portfolio for performance history (new table; added after
+/// budgets, defaults everywhere, so existing stores migrate automatically). Only positions with a
+/// known cost basis go into `costedValue`/`costBasis` — Binance balances carry no purchase price
+/// and would otherwise read as pure profit.
+@Model
+final class PortfolioSnapshot {
+    var id: UUID = UUID()
+    var date: Date = Date()
+    var currencyCode: String = "EUR"
+    /// Market value of every position (manual, Trading 212, Binance).
+    var totalValue: Decimal = 0
+    /// Market value of the positions whose cost basis is known.
+    var costedValue: Decimal = 0
+    /// What was paid for those positions.
+    var costBasis: Decimal = 0
+    /// Realized profit/loss to date (manual sales + Trading 212).
+    var realized: Decimal = 0
+
+    init(id: UUID = UUID(), date: Date, currencyCode: String, totalValue: Decimal, costedValue: Decimal,
+         costBasis: Decimal, realized: Decimal) {
+        self.id = id
+        self.date = date
+        self.currencyCode = currencyCode
+        self.totalValue = totalValue
+        self.costedValue = costedValue
+        self.costBasis = costBasis
+        self.realized = realized
+    }
+}
