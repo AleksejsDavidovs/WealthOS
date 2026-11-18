@@ -135,6 +135,8 @@ enum SettingsKey {
     /// Defaults to on (unset = on): bank access is lost silently otherwise.
     static let bankConsentReminders = "bankConsentRemindersEnabled"
     static let widgetHidesAmounts = "widgetHidesAmounts"
+    /// Company logos from Trading 212's public image server (on unless turned off).
+    static let companyLogos = "companyLogosEnabled"
     /// The month ("2026-10") whose report the user last opened or dismissed on Home.
     static let lastSeenReportMonth = "lastSeenReportMonth"
 }

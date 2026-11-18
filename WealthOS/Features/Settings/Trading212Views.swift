@@ -367,21 +367,24 @@ struct BrokerPositionRow: View {
 
     var body: some View {
         let position = value.position
+        // Trading 212 style: logo, name, "quantity SYMBOL"; value and "+€gain (percent)".
         HStack(spacing: 12) {
-            IconBadge(symbol: position.assetClass.symbol, color: Theme.color(named: position.assetClass.colorName))
+            TickerLogo(ticker: position.ticker, symbol: position.displaySymbol, size: 44)
             VStack(alignment: .leading, spacing: 3) {
-                Text(position.displaySymbol).font(.body.weight(.semibold)).lineLimit(1)
-                if !position.name.isEmpty {
-                    Text(position.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Text(priceLine(position))
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                Text(position.name.isEmpty ? position.displaySymbol : position.name).font(.body.weight(.semibold)).lineLimit(1)
+                Text("\(MoneyFormat.quantity(position.quantity)) \(position.displaySymbol)")
+                    .font(.caption.weight(.medium)).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
                 Text(valueText(position))
                     .font(.body.weight(.semibold)).monospacedDigit()
-                if let fraction = returnFraction(position) {
+                if let gain = position.unrealizedProfitLoss, !position.valueCurrency.isEmpty {
+                    let fraction = returnFraction(position)
+                    Text("\(MoneyFormat.string(gain, code: position.valueCurrency, showSign: true))\(fraction.map { " (\(MoneyFormat.percent(abs($0))))" } ?? "")")
+                        .font(.caption.weight(.semibold)).monospacedDigit()
+                        .foregroundStyle(Theme.signColor(gain))
+                } else if let fraction = returnFraction(position) {
                     Text(MoneyFormat.percent(fraction, showSign: true))
                         .font(.caption.weight(.semibold)).monospacedDigit()
                         .foregroundStyle(Theme.signColor(fraction))

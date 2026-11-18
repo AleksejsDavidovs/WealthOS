@@ -268,6 +268,7 @@ struct SecuritySettingsView: View {
 
 struct IntegrationsSettingsView: View {
     @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
+    @AppStorage(SettingsKey.companyLogos) private var logosEnabled = true
     @Environment(Trading212Service.self) private var trading212
     @Environment(BinanceService.self) private var binance
 
@@ -305,7 +306,15 @@ struct IntegrationsSettingsView: View {
             } footer: {
                 Text(marketEnabled
                      ? "Public prices from CoinGecko, Alpha Vantage and Frankfurter. Only symbols are sent."
-                     : "Off — WealthOS makes no network requests. Prices are entered manually.")
+                     : "Off — WealthOS makes no price requests. Prices are entered manually.")
+            }
+
+            Section {
+                Toggle(isOn: $logosEnabled) { Label("Company Logos", systemImage: "photo.on.rectangle") }
+            } footer: {
+                Text(logosEnabled
+                     ? "Logos are downloaded once by ticker from Trading 212's public image server and kept on this iPhone. Only the ticker is sent."
+                     : "Off — no logo requests. Positions show their ticker letters instead.")
             }
         }
         .navigationTitle("Investment Integrations")

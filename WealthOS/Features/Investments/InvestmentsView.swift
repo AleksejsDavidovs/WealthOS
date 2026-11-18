@@ -30,6 +30,7 @@ struct InvestmentsView: View {
                                            symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
                         } else {
                             if engine.hasAnyPositions { allocationCard(engine) }
+                            PortfolioMapCard(engine: engine).id("map")
                             PortfolioPerformanceCard(engine: engine).id("performance")
                             Trading212PortfolioCard(engine: engine)
                             DividendsCard(engine: engine).id("dividends")
@@ -239,9 +240,16 @@ struct HoldingRow: View {
     /// The external source (Trading 212 / Binance) the user said already counts this holding.
     var countedVia: String?
 
+    /// US stocks and ETFs by plain symbol ("AAPL" → "AAPL_US_EQ"); others show their letters.
+    private var logoTicker: String? {
+        let holding = position.holding
+        guard holding.assetClass == .stock || holding.assetClass == .etf, !holding.symbol.isEmpty, !holding.symbol.contains(".") else { return nil }
+        return "\(holding.symbol.uppercased())_US_EQ"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            IconBadge(symbol: position.holding.assetClass.symbol, color: Theme.color(named: position.holding.assetClass.colorName))
+            TickerLogo(ticker: logoTicker, symbol: position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol, size: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text(position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol)
                     .font(.body.weight(.semibold))
