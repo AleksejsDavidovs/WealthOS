@@ -151,4 +151,17 @@ struct SimulatorTests {
         #expect(MonteCarloEngine.percentile(values, 0.1) == 1.4)
         #expect(MonteCarloEngine.percentile(values, 0.9) == 4.6)
     }
+
+    @Test func clampedRepairsRunawayAmounts() {
+        var p = params(cash: -5_000_000_000_000, investments: 9_000_000_000_000, income: 3_000_000_000_000,
+                       expenses: 2_500_000_000_000, contribution: 1_000_000_000_000, years: 99)
+        p = p.clamped
+        #expect(p.monthlyIncome == SimulationParameters.maxMonthlyAmount)
+        #expect(p.monthlyExpenses == SimulationParameters.maxMonthlyAmount)
+        #expect(p.monthlyContribution == SimulationParameters.maxMonthlyAmount)
+        #expect(p.startingCash == -SimulationParameters.maxStartingBalance)
+        #expect(p.startingInvestments == SimulationParameters.maxStartingBalance)
+        #expect(p.years == SimulationParameters.yearRange.upperBound)
+        #expect(params(income: 4_000, expenses: 3_000).clamped == params(income: 4_000, expenses: 3_000))
+    }
 }

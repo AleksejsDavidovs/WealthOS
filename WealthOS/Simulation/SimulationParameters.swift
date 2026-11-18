@@ -43,6 +43,28 @@ nonisolated struct SimulationParameters: Codable, Equatable, Hashable, Sendable 
 
     static let yearRange: ClosedRange<Int> = 1...40
 
+    /// Hard cap for monthly income / expenses / investing (Precise Edit and stored scenarios).
+    static let maxMonthlyAmount: Decimal = 1_000_000
+    /// Hard cap for starting cash / investments, keeps projections far from Decimal/Double overflow.
+    static let maxStartingBalance: Decimal = 1_000_000_000
+    /// Fixed slider ranges — must never depend on the value being dragged, or the range
+    /// grows under the thumb and the value runs away.
+    static let sliderMonthlyMax: Double = 50_000
+    static let sliderContributionMax: Double = 25_000
+
+    /// Copy with every amount clamped to the supported limits (repairs out-of-range stored data).
+    var clamped: SimulationParameters {
+        var copy = self
+        func clamp(_ value: Decimal, _ low: Decimal, _ high: Decimal) -> Decimal { min(max(value, low), high) }
+        copy.years = min(max(years, Self.yearRange.lowerBound), Self.yearRange.upperBound)
+        copy.monthlyIncome = clamp(monthlyIncome, 0, Self.maxMonthlyAmount)
+        copy.monthlyExpenses = clamp(monthlyExpenses, 0, Self.maxMonthlyAmount)
+        copy.monthlyContribution = clamp(monthlyContribution, 0, Self.maxMonthlyAmount)
+        copy.startingCash = clamp(startingCash, -Self.maxStartingBalance, Self.maxStartingBalance)
+        copy.startingInvestments = clamp(startingInvestments, 0, Self.maxStartingBalance)
+        return copy
+    }
+
     /// Defaults for each preset scenario, seeded from the user's actual figures.
     static func preset(_ kind: ScenarioKind, startingCash: Decimal, startingInvestments: Decimal,
                        monthlyIncome: Decimal, monthlyExpenses: Decimal) -> SimulationParameters {

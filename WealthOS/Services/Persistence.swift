@@ -131,6 +131,9 @@ enum SettingsKey {
     static let budgetAlerts = "budgetAlertsEnabled"
     static let subscriptionReminders = "subscriptionRemindersEnabled"
     static let monthlyReportNotification = "monthlyReportNotificationEnabled"
+    /// Defaults to on (unset = on): bank access is lost silently otherwise.
+    static let bankConsentReminders = "bankConsentRemindersEnabled"
+    static let widgetHidesAmounts = "widgetHidesAmounts"
     /// The month ("2026-10") whose report the user last opened or dismissed on Home.
     static let lastSeenReportMonth = "lastSeenReportMonth"
 }

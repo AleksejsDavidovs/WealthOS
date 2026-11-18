@@ -32,6 +32,7 @@ struct HomeView: View {
                         if app.isDemoMode { DemoBanner() }
                         NetWorthHeroCard(summary: engine.summary, snapshots: baseSnapshots, code: baseCurrency)
                         if !engine.accounts.isEmpty { QuickActionsRow() }
+                        BankConsentBanner()
                         MonthlyReportBanner(engine: engine)
                         if !engine.summary.missingRateCurrencies.isEmpty {
                             InfoBanner(text: "Missing exchange rate for \(engine.summary.missingRateCurrencies.sorted().joined(separator: ", ")). Those balances are excluded from totals until you add a rate in Settings.",
@@ -66,6 +67,11 @@ struct HomeView: View {
                     // Development aid: `-UIScrollTo subscriptions` for visual checks.
                     if ProcessInfo.processInfo.arguments.contains("-UIScrollTo") {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo("subscriptions", anchor: .center) }
+                    }
+                    // `-UIScreen settings` opens Settings.
+                    if app.debugScreen == "settings" {
+                        app.debugScreen = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showSettings = true }
                     }
                 }
                 #endif
