@@ -10,6 +10,9 @@ struct InvestmentsView: View {
     @State private var selectedAngle: Double?
     @State private var debugShowDividends = false
     @State private var debugShowPortfolio = false
+    @AppStorage("investments.expanded.trading212") private var showTrading212 = false
+    @AppStorage("investments.expanded.binance") private var showBinance = false
+    @AppStorage("investments.expanded.manual") private var showManual = false
     @Query private var quotes: [MarketQuote]
     @Environment(MarketDataService.self) private var market
     @Environment(Trading212Service.self) private var trading212
@@ -32,10 +35,37 @@ struct InvestmentsView: View {
                             if engine.hasAnyPositions { allocationCard(engine) }
                             PortfolioMapCard(engine: engine).id("map")
                             PortfolioPerformanceCard(engine: engine).id("performance")
-                            Trading212PortfolioCard(engine: engine)
-                            DividendsCard(engine: engine).id("dividends")
-                            BinancePortfolioCard(engine: engine)
-                            if !engine.positions.isEmpty { holdingsList(engine) }
+                            // Accounts: one line each, tap to expand the full list.
+                            if engine.broker.snapshot != nil {
+                                CollapsibleSection(title: "Trading 212",
+                                                   subtitle: "\(engine.brokerPositions.count) positions · Cash \(MoneyFormat.string(engine.brokerCashBase ?? 0, code: baseCurrency, fractionDigits: 0))",
+                                                   value: MoneyFormat.string(engine.brokerTotalBase, code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showTrading212) {
+                                    IconBadge(symbol: "building.columns.fill", color: .blue, size: 38)
+                                } content: {
+                                    Trading212PortfolioCard(engine: engine, embedded: true)
+                                }
+                                .id("trading212")
+                            }
+                            if engine.binance.snapshot != nil {
+                                CollapsibleSection(title: "Binance", subtitle: "\(engine.binanceAssets.count) assets",
+                                                   value: MoneyFormat.string(engine.binanceTotalBase, code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showBinance) {
+                                    IconBadge(symbol: "bitcoinsign.circle.fill", color: .orange, size: 38)
+                                } content: {
+                                    BinancePortfolioCard(engine: engine, embedded: true)
+                                }
+                            }
+                            if !engine.positions.isEmpty {
+                                let counted = engine.positions.filter { engine.countedVia($0.holding) == nil }
+                                CollapsibleSection(title: "Manual Holdings", subtitle: "\(engine.positions.count) holding\(engine.positions.count == 1 ? "" : "s")",
+                                                   value: MoneyFormat.string(counted.compactMap(\.marketValueBase).reduce(0, +), code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showManual) {
+                                    IconBadge(symbol: "hand.point.up.left.fill", color: .indigo, size: 38)
+                                } content: {
+                                    holdingsRows(engine)
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -210,9 +240,8 @@ struct InvestmentsView: View {
         return nil
     }
 
-    private func holdingsList(_ engine: FinanceEngine) -> some View {
+    private func holdingsRows(_ engine: FinanceEngine) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader("Holdings")
             VStack(spacing: 0) {
                 let sorted = engine.positions.sorted { ($0.marketValueBase ?? 0) > ($1.marketValueBase ?? 0) }
                 let quoteIndex = Dictionary(quotes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
@@ -228,7 +257,6 @@ struct InvestmentsView: View {
                     if position.id != sorted.last?.id { Divider() }
                 }
             }
-            .card(padding: 14)
         }
     }
 }

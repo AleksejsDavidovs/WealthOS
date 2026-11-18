@@ -216,6 +216,28 @@ nonisolated struct T212Transaction: Decodable, Sendable {
     var dateTime: String?
     var reference: String?
     var type: String?
+
+    enum CodingKeys: String, CodingKey { case amount, currency, dateTime, reference, type }
+
+    init(amount: Decimal?, currency: String?, dateTime: String?, reference: String?, type: String?) {
+        self.amount = amount
+        self.currency = currency
+        self.dateTime = dateTime
+        self.reference = reference
+        self.type = type
+    }
+
+    /// Beta API: tolerate numbers sent as strings and ids sent as numbers instead of failing the page.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = (try? c.decodeIfPresent(Decimal.self, forKey: .amount))
+            ?? (try? c.decodeIfPresent(String.self, forKey: .amount)).flatMap { $0.flatMap { Decimal(string: $0, locale: Locale(identifier: "en_US_POSIX")) } }
+        currency = try? c.decodeIfPresent(String.self, forKey: .currency)
+        dateTime = try? c.decodeIfPresent(String.self, forKey: .dateTime)
+        reference = (try? c.decodeIfPresent(String.self, forKey: .reference))
+            ?? (try? c.decodeIfPresent(Int64.self, forKey: .reference)).flatMap { $0.map(String.init) }
+        type = try? c.decodeIfPresent(String.self, forKey: .type)
+    }
 }
 
 // MARK: - Transport
@@ -311,14 +333,25 @@ nonisolated struct Trading212Client: Sendable {
         try await fetch(.orders, query: Self.pageQuery(cursor))
     }
 
-    /// Deposits, withdrawals, fees, transfers and interest.
-    func transactions(cursor: String?) async throws -> T212TransactionPage {
-        try await fetch(.transactions, query: Self.pageQuery(cursor))
+    /// Deposits, withdrawals, fees, transfers and interest. `next` is the previous page's
+    /// `nextPagePath`: its `cursor` and `time` values are carried over (both validated).
+    func transactions(next: String?) async throws -> T212TransactionPage {
+        try await fetch(.transactions, query: Self.pageQuery(nextPagePath: next))
     }
 
     static func pageQuery(_ cursor: String?) -> [URLQueryItem] {
         var query = [URLQueryItem(name: "limit", value: "50")]
         if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        return query
+    }
+
+    /// limit=50 plus the validated `cursor` and `time` of a `nextPagePath`; nothing else is copied.
+    static func pageQuery(nextPagePath: String?) -> [URLQueryItem] {
+        var query = pageQuery(cursor(fromNextPagePath: nextPagePath))
+        if let time = URLComponents(string: nextPagePath ?? "")?.queryItems?.first(where: { $0.name == "time" })?.value,
+           !time.isEmpty, time.count <= 40, time.allSatisfy({ $0.isASCII && ($0.isNumber || "-:.TZ+".contains($0)) }) {
+            query.append(URLQueryItem(name: "time", value: time))
+        }
         return query
     }
 

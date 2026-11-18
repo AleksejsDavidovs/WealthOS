@@ -33,7 +33,7 @@ struct Trading212SettingsView: View {
             } else {
                 CredentialStateSection(state: service.credentialState, protectionUpgradeFailed: service.protectionUpgradeFailed,
                                        retry: { service.reloadConnectionState() })
-                if service.isConnected { statusSection }
+                if service.isConnected { statusSection; historySection }
                 if !service.isConnected || service.needsReconnect { connectSection }
                 if let snapshot = snapshots.first {
                     if !service.isConnected { cachedSection(snapshot) }
@@ -90,6 +90,33 @@ struct Trading212SettingsView: View {
             Text("Status")
         } footer: {
             Text("Syncs automatically when you open WealthOS if the data is older than 15 minutes. If a sync fails, the last synced data stays in place.")
+        }
+    }
+
+    /// Per-feed status of the read-only history downloads (diagnostics live here, not on Investments).
+    private var historySection: some View {
+        Section {
+            ForEach(Trading212HistoryKind.allCases, id: \.self) { kind in
+                VStack(alignment: .leading, spacing: 2) {
+                    LabeledContent(kind.title.prefix(1).uppercased() + kind.title.dropFirst()) {
+                        if let error = service.historyErrors[kind] {
+                            Text(error == .missingPermission ? "No permission" : "Failed").foregroundStyle(Theme.warning)
+                        } else if let date = service.historyFetchedAt(kind) {
+                            Text(date.formatted(date: .abbreviated, time: .shortened))
+                        } else {
+                            Text("Not yet")
+                        }
+                    }
+                    if let error = service.historyErrors[kind] {
+                        Text(error == .missingPermission ? "The API key needs \(kind.scope)." : (error.errorDescription ?? ""))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("History")
+        } footer: {
+            Text("Dividends, trades and deposits are read-only history. They're checked at most every 6 hours, or when you tap Sync Now.")
         }
     }
 
@@ -267,6 +294,8 @@ struct CredentialStateSection: View {
 /// Home, Goals and the Simulator, so every screen shows the same numbers.
 struct Trading212PortfolioCard: View {
     let engine: FinanceEngine
+    /// Inside a collapsible Investments section: no own header or card background.
+    var embedded = false
     @Environment(Trading212Service.self) private var service
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
@@ -275,8 +304,10 @@ struct Trading212PortfolioCard: View {
     var body: some View {
         if let snapshot = engine.broker.snapshot {
             VStack(alignment: .leading, spacing: 10) {
-                SectionHeader("Trading 212") {
-                    NavigationLink("Manage") { Trading212SettingsView() }.font(.subheadline.weight(.medium))
+                if !embedded {
+                    SectionHeader("Trading 212") {
+                        NavigationLink("Manage") { Trading212SettingsView() }.font(.subheadline.weight(.medium))
+                    }
                 }
                 VStack(alignment: .leading, spacing: 14) {
                     header(snapshot)
@@ -311,8 +342,20 @@ struct Trading212PortfolioCard: View {
                             if value.id != sorted.last?.id { Divider() }
                         }
                     }
+                    if embedded {
+                        Divider()
+                        NavigationLink { Trading212SettingsView() } label: {
+                            HStack {
+                                Label("Manage Trading 212", systemImage: "gearshape").font(.subheadline.weight(.medium))
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .card(padding: 14)
+                .embeddedCard(embedded)
             }
         }
     }

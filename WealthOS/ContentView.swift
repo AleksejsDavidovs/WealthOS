@@ -152,6 +152,7 @@ struct MainTabView: View {
 /// the scroll content, so it never covers the chart, other cards, or the tab bar.
 struct QuickActionsRow: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 10) {
@@ -169,7 +170,7 @@ struct QuickActionsRow: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(Theme.positive)
+            .tint(colorScheme == .dark ? Theme.positive : .primary)
 
             Button { request(.transfer) } label: {
                 Label("Transfer", systemImage: "arrow.left.arrow.right")
@@ -177,7 +178,7 @@ struct QuickActionsRow: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(.indigo)
+            .tint(colorScheme == .dark ? .indigo : .primary)
         }
         .controlSize(.large)
         .labelStyle(.titleAndIcon)

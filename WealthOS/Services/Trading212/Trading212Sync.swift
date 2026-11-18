@@ -509,6 +509,10 @@ final class Trading212Service {
     /// already stored item, so only the first download walks the whole history. Never fails
     /// the balance sync: errors are kept per feed in `historyErrors`, stored rows stay as they were.
     private func refreshHistory(client: Trading212Client, force: Bool, started: Int, context: ModelContext, now: Date) async {
+        // History runs after the balances are saved, so it can wait out a full rate-limit window.
+        var client = client
+        client.maxRetryWait = 65
+        client.maxAttempts = 4
         for kind in Trading212HistoryKind.allCases {
             guard started == generation, isConnected else { return }
             await refresh(kind, client: client, force: force, started: started, context: context, now: now)
@@ -543,8 +547,8 @@ final class Trading212Service {
                 try Persistence.commit(context, save: saveContext) { try Trading212HistoryReconciler.apply(orders: parsed, now: now, in: context) }
             case .transactions:
                 let known = Set(try context.fetch(FetchDescriptor<BrokerCashTransaction>()).map(\.key))
-                let items = try await walkPages(known: known) { cursor in
-                    let page = try await client.transactions(cursor: cursor)
+                let items = try await walkPages(known: known, passFullPath: true) { next in
+                    let page = try await client.transactions(next: next)
                     return (page.items ?? [], page.nextPagePath)
                 } keys: { Trading212HistoryParsing.transactions($0).map(\.key) }
                 guard started == generation, isConnected else { return }
@@ -562,16 +566,21 @@ final class Trading212Service {
     }
 
     /// Follows `nextPagePath` cursors until a page contains a known key, the feed ends or the page cap is hit.
-    private func walkPages<Item>(known: Set<String>, fetch: (String?) async throws -> ([Item], String?),
+    /// `passFullPath`: hand the whole `nextPagePath` to `fetch` (it extracts the allowed values),
+    /// otherwise just its cursor.
+    private func walkPages<Item>(known: Set<String>, passFullPath: Bool = false,
+                                 fetch: (String?) async throws -> ([Item], String?),
                                  keys: ([Item]) -> [String]) async throws -> [Item] {
         var all: [Item] = []
-        var cursor: String?
+        var argument: String?
+        var lastCursor: String?
         for _ in 0..<Self.historyMaxPages {
-            let (items, nextPath) = try await fetch(cursor)
+            let (items, nextPath) = try await fetch(argument)
             all += items
             if keys(items).contains(where: known.contains) { break }
-            guard !items.isEmpty, let next = Trading212Client.cursor(fromNextPagePath: nextPath), next != cursor else { break }
-            cursor = next
+            guard !items.isEmpty, let next = Trading212Client.cursor(fromNextPagePath: nextPath), next != lastCursor else { break }
+            lastCursor = next
+            argument = passFullPath ? nextPath : next
         }
         return all
     }

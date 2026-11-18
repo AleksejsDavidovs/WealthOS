@@ -20,8 +20,9 @@ private func dividendNotice(_ service: Trading212Service) -> String? {
     switch service.dividendError {
     case .missingPermission?:
         return "Your Trading 212 API key doesn't include dividend history. Create a new key in Trading 212 with dividend history access (history:dividends) and reconnect in Settings → Investment Integrations."
-    case let error?:
-        return "Dividends couldn't be updated: \(error.errorDescription ?? "unknown error"). Showing the last downloaded payouts."
+    case _?:
+        // Temporary failures are retried on the next sync; the last payouts stay visible.
+        return nil
     case nil:
         return service.dividendsFetchedAt == nil && service.isConnected ? "Dividends download with the next Trading 212 sync." : nil
     }

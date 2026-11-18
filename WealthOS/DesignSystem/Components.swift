@@ -118,13 +118,16 @@ struct IconBadge: View {
     let symbol: String
     let color: Color
     var size: CGFloat = 36
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // Dark: solid tile with a white glyph. Light: soft tint with a colored glyph — calmer on white.
         Image(systemName: symbol)
             .font(.system(size: size * 0.45, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(colorScheme == .dark ? AnyShapeStyle(.white) : AnyShapeStyle(color))
             .frame(width: size, height: size)
-            .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
+            .background(colorScheme == .dark ? AnyShapeStyle(color.gradient) : AnyShapeStyle(color.opacity(0.14)),
+                        in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
             .accessibilityHidden(true)
     }
 }
@@ -329,5 +332,57 @@ extension View {
         } message: {
             Text(message.wrappedValue ?? "")
         }
+    }
+}
+
+extension View {
+    /// A regular card, or no card when the content sits inside another container.
+    @ViewBuilder
+    func embeddedCard(_ embedded: Bool, padding: CGFloat = 14) -> some View {
+        if embedded { self } else { self.card(padding: padding) }
+    }
+}
+
+/// A card that shows a one-line summary and expands to its full content on tap.
+struct CollapsibleSection<Icon: View, Content: View>: View {
+    let title: String
+    var subtitle: String?
+    var value: String?
+    @Binding var isExpanded: Bool
+    @ViewBuilder var icon: () -> Icon
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { withAnimation(.snappy) { isExpanded.toggle() } } label: {
+                HStack(spacing: 12) {
+                    icon()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                        if let subtitle {
+                            Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    if let value {
+                        Text(value).font(.body.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded ? "Collapses the list" : "Shows the full list")
+
+            if isExpanded {
+                Divider().padding(.vertical, 12)
+                content()
+                    .transition(.opacity)
+            }
+        }
+        .card(padding: 14)
     }
 }

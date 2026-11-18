@@ -11,14 +11,38 @@ enum Theme {
     static let accent = Color(light: Color(red: 0.0, green: 0.52, blue: 0.42), dark: Color(red: 0.20, green: 0.78, blue: 0.62))
     /// Fill for prominent buttons; white labels stay readable in both appearances.
     static let accentFill = Color(red: 0.0, green: 0.50, blue: 0.42)
-    static let positive = Color(light: Color(red: 0.0, green: 0.50, blue: 0.22), dark: Color(red: 0.25, green: 0.82, blue: 0.48))
-    static let negative = Color(light: Color(red: 0.80, green: 0.10, blue: 0.12), dark: Color(red: 1.0, green: 0.45, blue: 0.43))
+    // Light: calmer forest green / brick red (still ≥ 4.5:1 on white). Dark: unchanged.
+    static let positive = Color(light: Color(red: 0.12, green: 0.47, blue: 0.30), dark: Color(red: 0.25, green: 0.82, blue: 0.48))
+    static let negative = Color(light: Color(red: 0.72, green: 0.20, blue: 0.18), dark: Color(red: 1.0, green: 0.45, blue: 0.43))
     static let warning = Color(light: Color(red: 0.70, green: 0.35, blue: 0.0), dark: Color(red: 1.0, green: 0.68, blue: 0.25))
     static let projection = Color(light: Color(red: 0.45, green: 0.22, blue: 0.80), dark: Color(red: 0.72, green: 0.55, blue: 1.0))
 
     static let heroGradient = LinearGradient(
         colors: [Color(red: 0.07, green: 0.36, blue: 0.33), Color(red: 0.05, green: 0.16, blue: 0.27)],
         startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// Light appearance: one calm graphite anchor instead of a teal block on white.
+    static let heroGradientLight = LinearGradient(
+        colors: [Color(red: 0.17, green: 0.20, blue: 0.25), Color(red: 0.10, green: 0.12, blue: 0.16)],
+        startPoint: .topLeading, endPoint: .bottomTrailing)
+
+    static func heroBackground(_ scheme: ColorScheme) -> LinearGradient { scheme == .dark ? heroGradient : heroGradientLight }
+
+    /// Big headline amounts: colored on dark, plain on light (the sign is in the text).
+    static func headlineColor(_ value: Decimal, _ scheme: ColorScheme) -> Color {
+        scheme == .dark ? signColor(value) : .primary
+    }
+
+    /// Light appearance portfolio map: muted solid tiles (sage / brick), deeper for bigger moves.
+    static func mapTile(fraction: Double?, strength: Double) -> Color {
+        guard let fraction else { return Color(red: 0.55, green: 0.58, blue: 0.62) }
+        let t = min(1, max(0, strength))
+        func mix(_ a: (Double, Double, Double), _ b: (Double, Double, Double)) -> Color {
+            Color(red: a.0 + (b.0 - a.0) * t, green: a.1 + (b.1 - a.1) * t, blue: a.2 + (b.2 - a.2) * t)
+        }
+        return fraction >= 0
+            ? mix((0.50, 0.66, 0.56), (0.20, 0.45, 0.32))
+            : mix((0.80, 0.55, 0.52), (0.62, 0.24, 0.22))
+    }
 
     static let palette: [String] = ["blue", "green", "mint", "teal", "cyan", "indigo", "purple", "pink", "red", "orange", "yellow", "brown", "gray"]
 

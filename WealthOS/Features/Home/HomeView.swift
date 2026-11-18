@@ -205,6 +205,7 @@ struct NetWorthHeroCard: View {
     let summary: NetWorthSummary
     let snapshots: [NetWorthSnapshot]
     let code: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -229,7 +230,7 @@ struct NetWorthHeroCard: View {
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.heroGradient, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(Theme.heroBackground(colorScheme), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(alignment: .topTrailing) {
             Image(systemName: "chart.line.uptrend.xyaxis")
                 .font(.system(size: 90, weight: .bold))

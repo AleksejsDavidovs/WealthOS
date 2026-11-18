@@ -144,6 +144,10 @@ enum PlanningMonitor {
 
     /// Runs after data changes (see `DataMaintenance.refreshSnapshot`), on the real store only.
     static func run(context: ModelContext, engine: FinanceEngine, now: Date = .now, defaults: UserDefaults = .standard) {
+        #if DEBUG
+        // Visual-check launches (`-UIDemoTab`) never schedule notifications or ask for permission.
+        if ProcessInfo.processInfo.arguments.contains("-UIDemoTab") { return }
+        #endif
         let budgetAlerts = defaults.bool(forKey: SettingsKey.budgetAlerts)
         let reminders = defaults.bool(forKey: SettingsKey.subscriptionReminders)
         let report = defaults.bool(forKey: SettingsKey.monthlyReportNotification)

@@ -178,7 +178,6 @@ struct PortfolioDetailView: View {
     @ViewBuilder private func trading212Sections(_ a: Trading212Analytics) -> some View {
         let code = a.currency
         let missing = Trading212HistoryKind.allCases.filter { service.historyErrors[$0] == .missingPermission }
-        let failed = Trading212HistoryKind.allCases.filter { kind in service.historyErrors[kind].map { $0 != .missingPermission } ?? false }
 
         SectionHeader("Trading 212", subtitle: a.firstActivity.map { "History since \($0.formatted(.dateTime.month(.abbreviated).year()))" })
             .padding(.top, 4)
@@ -187,10 +186,6 @@ struct PortfolioDetailView: View {
         if !missing.isEmpty {
             InfoBanner(text: "Your API key can't read \(missing.map(\.title).joined(separator: ", ")). Create a key with \(missing.map(\.scope).joined(separator: ", ")) in Trading 212 and reconnect in Settings → Investment Integrations.",
                        symbol: "key.fill", tint: .orange)
-        }
-        if !failed.isEmpty {
-            InfoBanner(text: "Couldn't update \(failed.map(\.title).joined(separator: ", ")) — showing what was downloaded before.",
-                       symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
         if !a.hasHistory {
             InfoBanner(text: service.historyFetchedAt(.orders) == nil
@@ -216,6 +211,7 @@ struct PortfolioDetailView: View {
         if a.hasHistory { historyChart(a) }
         gainBreakdown(a).id("gain")
         yearCard(a)
+        DividendsCard(engine: engine).id("dividends")
         if !a.cash.isEmpty { monthlyFlows(a) }
         if !a.instruments.isEmpty { instrumentsCard(a).id("instruments") }
         if !a.trades.isEmpty { tradesCard(a).id("trades") }

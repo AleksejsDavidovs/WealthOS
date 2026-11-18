@@ -52,6 +52,24 @@ struct Trading212HistoryParsingTests {
     }
 }
 
+@Suite("Trading 212 history — robustness")
+struct Trading212HistoryRobustnessTests {
+    @Test func transactionPagesCarryCursorAndTimeOnly() {
+        let query = Trading212Client.pageQuery(nextPagePath: "/api/v0/equity/history/transactions?limit=50&cursor=abc123&time=2026-01-05T09:00:00Z&evil=1")
+        #expect(query.map(\.name) == ["limit", "cursor", "time"])
+        #expect(query.first { $0.name == "time" }?.value == "2026-01-05T09:00:00Z")
+        let bad = Trading212Client.pageQuery(nextPagePath: "/x?cursor=1&time=2026%2F01")
+        #expect(bad.map(\.name) == ["limit", "cursor"])
+    }
+
+    @Test func lenientTransactionDecoding() throws {
+        let page: T212TransactionPage = try T212Fixtures.decode(#"{"items":[{"amount":"12.50","currency":"EUR","dateTime":"2026-01-05T09:00:00Z","reference":123456,"type":"DEPOSIT"}],"nextPagePath":null}"#)
+        let parsed = Trading212HistoryParsing.transactions(page.items ?? [])
+        #expect(parsed.first?.amount == Decimal(string: "12.5")!)
+        #expect(parsed.first?.key == "ref:123456")
+    }
+}
+
 @Suite("Trading 212 analytics")
 struct Trading212AnalyticsTests {
     typealias A = Trading212Analytics

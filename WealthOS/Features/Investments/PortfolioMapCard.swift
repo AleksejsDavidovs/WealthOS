@@ -56,6 +56,7 @@ struct PortfolioMapItem: Identifiable, Equatable {
 /// Trading 212-style map: tile size = position value, color = return since purchase.
 struct PortfolioMapCard: View {
     let engine: FinanceEngine
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     @State private var selectedID: String?
     @State private var expanded = false
@@ -123,7 +124,13 @@ struct PortfolioMapCard: View {
                                         value: value, gain: gain, fraction: gain.map { $0 / max(value - $0, 1) }, quantity: nil, source: "")]
     }
 
+    /// Light: muted solid tiles with white text. Dark: tinted tiles with colored text.
+    private var solidTiles: Bool { colorScheme == .light }
+
     private func tileColor(_ item: PortfolioMapItem) -> Color {
+        if solidTiles {
+            return Theme.mapTile(fraction: item.fraction?.doubleValue, strength: min(1, abs(item.fraction?.doubleValue ?? 0) / 0.3))
+        }
         guard let fraction = item.fraction else { return Color.secondary.opacity(0.16) }
         let strength = min(1, abs(fraction.doubleValue) / 0.3)
         let base = fraction >= 0 ? Theme.positive : Theme.negative
@@ -137,7 +144,8 @@ struct PortfolioMapCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tileColor(item))
             if selected {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.7), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(solidTiles ? Color.white.opacity(0.9) : Color.primary.opacity(0.7), lineWidth: solidTiles ? 3 : 2)
             }
             VStack(spacing: short > 90 ? 6 : 3) {
                 if short >= 38 {
@@ -145,9 +153,11 @@ struct PortfolioMapCard: View {
                 }
                 if size.width >= 44, size.height >= 52 {
                     Text(item.symbol).font(.system(size: short > 90 ? 15 : 11, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6)
+                        .foregroundStyle(solidTiles ? Color.white : Color.primary)
                     Text(item.fraction.map { MoneyFormat.percent($0, showSign: false) } ?? MoneyFormat.percent(share, fractionDigits: 0))
                         .font(.system(size: short > 90 ? 15 : 10, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(item.fraction.map { $0 >= 0 ? Theme.positive : Theme.negative } ?? .secondary)
+                        .foregroundStyle(solidTiles ? Color.white.opacity(0.92)
+                                         : (item.fraction.map { $0 >= 0 ? Theme.positive : Theme.negative } ?? .secondary))
                         .lineLimit(1).minimumScaleFactor(0.6)
                 }
             }
