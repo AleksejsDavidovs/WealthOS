@@ -286,6 +286,16 @@ struct Trading212PortfolioCard: View {
                                ?? MoneyFormat.string(snapshot.cashTotal, code: snapshot.currencyCode, fractionDigits: 0)),
                         Metric(title: "Positions", value: "\(engine.brokerPositions.count)"),
                     ])
+                    NavigationLink { PortfolioDetailView(engine: engine) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "chart.xyaxis.line").foregroundStyle(Theme.accent)
+                            Text("History & Returns").font(.subheadline.weight(.medium))
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     if duplicateCount > 0 {
                         NavigationLink { Trading212SettingsView() } label: {
                             InfoBanner(text: "\(duplicateCount) manual record\(duplicateCount == 1 ? "" : "s") may track the same money as Trading 212. Tap to review so nothing is counted twice.",

@@ -167,6 +167,114 @@ enum DemoDataFactory {
         context.insert(RecurringRule(kind: .expense, amount: 13, accountID: checking.id, categoryID: category("Subscriptions"),
                                      note: "Music streaming", frequency: .monthly,
                                      startDate: calendar.date(byAdding: .month, value: 1, to: now) ?? now))
+
+        // Trading 212 dividends (demo): a monthly payer, a quarterly ETF and a quarterly stock.
+        let payers: [(ticker: String, name: String, every: Int, amount: Decimal, quantity: Decimal, perShare: Decimal)] = [
+            ("O_US_EQ", "Realty Income", 1, Decimal(string: "3.12")!, 14, Decimal(string: "0.2635")!),
+            ("VUSAl_EQ", "Vanguard S&P 500 UCITS ETF", 3, Decimal(string: "11.48")!, 42, Decimal(string: "0.2973")!),
+            ("AAPL_US_EQ", "Apple", 3, Decimal(string: "1.53")!, 8, Decimal(string: "0.25")!),
+        ]
+        for payer in payers {
+            for back in stride(from: 0, through: 14, by: payer.every) {
+                guard let paid = calendar.date(byAdding: .month, value: -back, to: calendar.startOfDay(for: now)) else { continue }
+                var parts = calendar.dateComponents([.year, .month], from: paid)
+                parts.day = payer.every == 1 ? 15 : 8
+                parts.hour = 9
+                guard let day = calendar.date(from: parts), day <= now else { continue }
+                let row = BrokerDividend(key: "demo:\(payer.ticker):\(back)", syncedAt: now)
+                row.ticker = payer.ticker
+                row.name = payer.name
+                row.amount = payer.amount + Decimal(back % 3) / 10
+                row.currencyCode = "EUR"
+                row.paidOn = day
+                row.quantity = payer.quantity
+                row.grossPerShare = payer.perShare
+                row.instrumentCurrency = "USD"
+                row.type = "ORDINARY"
+                context.insert(row)
+            }
+        }
+
+        // Trading 212 account (demo): snapshot, positions and 15 months of history.
+        let t212 = BrokerAccountSnapshot(environment: .live, currencyCode: "EUR", syncedAt: now)
+        // Chosen so value − deposits matches gains + dividends + interest − fees (no unexplained "other").
+        t212.cashAvailable = Decimal(string: "1675.61")!
+        context.insert(t212)
+        let holdings: [(ticker: String, name: String, type: String, qty: Decimal, value: Decimal, cost: Decimal)] = [
+            ("VUSAl_EQ", "Vanguard S&P 500 UCITS ETF", "ETF", 42, 4_310, 3_620),
+            ("O_US_EQ", "Realty Income", "STOCK", 14, 742, 768),
+            ("AAPL_US_EQ", "Apple", "STOCK", 8, 1_611, 1_240),
+        ]
+        for holding in holdings {
+            let position = BrokerPosition(ticker: holding.ticker, syncedAt: now)
+            position.name = holding.name
+            position.instrumentType = holding.type
+            position.shortName = Trading212Matching.baseSymbol(ofTicker: holding.ticker)
+            position.quantity = holding.qty
+            position.valueCurrency = "EUR"
+            position.currentValue = holding.value
+            position.totalCost = holding.cost
+            position.unrealizedProfitLoss = holding.value - holding.cost
+            context.insert(position)
+        }
+        func monthsAgo(_ months: Int, day: Int) -> Date {
+            let base = calendar.date(byAdding: .month, value: -months, to: now) ?? now
+            var parts = calendar.dateComponents([.year, .month], from: base)
+            parts.day = day
+            parts.hour = 10
+            return min(calendar.date(from: parts) ?? base, now)
+        }
+        var cashIndex = 0
+        func cash(_ type: String, _ amount: Decimal, _ date: Date) {
+            cashIndex += 1
+            let row = BrokerCashTransaction(key: "demo:cash:\(cashIndex)", syncedAt: now)
+            row.type = type
+            row.amount = amount
+            row.currencyCode = "EUR"
+            row.date = date
+            context.insert(row)
+        }
+        var orderIndex = 0
+        func order(_ ticker: String, _ name: String, buy: Bool, qty: Decimal, price: Decimal, net: Decimal,
+                   realized: Decimal = 0, fees: Decimal = 0, _ date: Date) {
+            orderIndex += 1
+            let row = BrokerOrder(key: "demo:order:\(orderIndex)", syncedAt: now)
+            row.ticker = ticker
+            row.name = name
+            row.side = buy ? "BUY" : "SELL"
+            row.quantity = qty
+            row.price = price
+            row.instrumentCurrency = "USD"
+            row.netValue = net
+            row.fees = fees
+            row.realized = realized
+            row.currencyCode = "EUR"
+            row.filledAt = date
+            context.insert(row)
+        }
+        cash("DEPOSIT", 2_000, monthsAgo(15, day: 2))
+        order("VUSAl_EQ", "Vanguard S&P 500 UCITS ETF", buy: true, qty: 20, price: Decimal(string: "94.10")!, net: 1_745, fees: Decimal(string: "2.61")!, monthsAgo(15, day: 3))
+        order("AAPL_US_EQ", "Apple", buy: true, qty: 4, price: Decimal(string: "178.20")!, net: 655, fees: Decimal(string: "0.98")!, monthsAgo(14, day: 8))
+        for back in stride(from: 14, through: 0, by: -1) {
+            cash("DEPOSIT", back % 4 == 0 ? 600 : 300, monthsAgo(back, day: 1))
+            if back % 2 == 0 {
+                order("VUSAl_EQ", "Vanguard S&P 500 UCITS ETF", buy: true, qty: 3, price: Decimal(97 + (14 - back)), net: Decimal(270 + (14 - back) * 3),
+                      fees: Decimal(string: "0.40")!, monthsAgo(back, day: 3))
+            }
+        }
+        order("O_US_EQ", "Realty Income", buy: true, qty: 14, price: Decimal(string: "58.90")!, net: 768, fees: Decimal(string: "1.15")!, monthsAgo(11, day: 12))
+        order("AAPL_US_EQ", "Apple", buy: true, qty: 6, price: Decimal(string: "190.40")!, net: 1_050, fees: Decimal(string: "1.57")!, monthsAgo(9, day: 20))
+        order("AAPL_US_EQ", "Apple", buy: false, qty: 2, price: Decimal(string: "228.10")!, net: 418, realized: 92, fees: Decimal(string: "0.63")!, monthsAgo(4, day: 14))
+        order("TSLA_US_EQ", "Tesla", buy: true, qty: 3, price: Decimal(string: "240.00")!, net: 662, fees: Decimal(string: "0.99")!, monthsAgo(10, day: 5))
+        order("TSLA_US_EQ", "Tesla", buy: false, qty: 3, price: Decimal(string: "205.00")!, net: 566, realized: -96, fees: Decimal(string: "0.85")!, monthsAgo(6, day: 22))
+        cash("WITHDRAW", -500, monthsAgo(7, day: 18))
+        for back in 0...11 { cash("INTEREST_ON_FREE_CASH", Decimal(string: "0.42")! + Decimal(back % 3) / 10, monthsAgo(back, day: 28)) }
+        // Daily account value for the last 45 days.
+        for back in stride(from: 45, through: 0, by: -1) {
+            guard let day = calendar.date(byAdding: .day, value: -back, to: now) else { continue }
+            let drift = Decimal(45 - back) * 9 + Decimal(Int(generator.next() % 120)) - 60
+            context.insert(BrokerValuePoint(date: day, currencyCode: "EUR", value: 7_935 + drift, cash: Decimal(string: "1675.61")!))
+        }
         try? context.save()
     }
 }

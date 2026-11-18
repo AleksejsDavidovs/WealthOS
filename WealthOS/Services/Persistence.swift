@@ -11,7 +11,8 @@ enum Persistence {
         BrokerAccountSnapshot.self, BrokerPosition.self, BrokerLink.self,
         BinanceAccountSnapshot.self, BinanceHolding.self, BinanceLink.self,
         BankConnection.self, BankAccountLink.self, BankTransaction.self, BankCounterpartyRule.self,
-        Budget.self, SubscriptionDecision.self, PortfolioSnapshot.self
+        Budget.self, SubscriptionDecision.self, PortfolioSnapshot.self, BrokerDividend.self,
+        BrokerOrder.self, BrokerCashTransaction.self, BrokerValuePoint.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }

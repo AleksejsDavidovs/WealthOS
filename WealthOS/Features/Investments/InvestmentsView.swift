@@ -8,6 +8,8 @@ struct InvestmentsView: View {
     @State private var showHoldingEditor = false
     @State private var showRates = false
     @State private var selectedAngle: Double?
+    @State private var debugShowDividends = false
+    @State private var debugShowPortfolio = false
     @Query private var quotes: [MarketQuote]
     @Environment(MarketDataService.self) private var market
     @Environment(Trading212Service.self) private var trading212
@@ -30,6 +32,7 @@ struct InvestmentsView: View {
                             if engine.hasAnyPositions { allocationCard(engine) }
                             PortfolioPerformanceCard(engine: engine).id("performance")
                             Trading212PortfolioCard(engine: engine)
+                            DividendsCard(engine: engine).id("dividends")
                             BinancePortfolioCard(engine: engine)
                             if !engine.positions.isEmpty { holdingsList(engine) }
                         }
@@ -39,14 +42,27 @@ struct InvestmentsView: View {
                 }
                 #if DEBUG
                 .onAppear {
-                    // Development aid: `-UIScrollTo performance` for visual checks.
-                    if ProcessInfo.processInfo.arguments.contains("-UIScrollTo") {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo("performance", anchor: .center) }
+                    // Development aid: `-UIScrollTo <performance|dividends>` and `-UIScreen dividends` for visual checks.
+                    let arguments = ProcessInfo.processInfo.arguments
+                    if let index = arguments.firstIndex(of: "-UIScrollTo") {
+                        let target = index + 1 < arguments.count ? arguments[index + 1] : "performance"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo(target, anchor: .center) }
+                    }
+                    if app.debugScreen == "dividends" || app.debugScreen == "portfolio" {
+                        let portfolio = app.debugScreen == "portfolio"
+                        app.debugScreen = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                            if portfolio { debugShowPortfolio = true } else { debugShowDividends = true }
+                        }
                     }
                 }
                 #endif
                 }
                 .screenBackground()
+                #if DEBUG
+                .navigationDestination(isPresented: $debugShowDividends) { DividendsView(engine: engine) }
+                .navigationDestination(isPresented: $debugShowPortfolio) { PortfolioDetailView(engine: engine) }
+                #endif
                 .refreshable {
                     if !app.isDemoMode {
                         async let broker: Void = refreshTrading212()

@@ -299,7 +299,14 @@ struct PortfolioPerformanceCard: View {
         let performance = PortfolioPerformance(points: points, from: range.start(now: .now))
         if engine.hasAnyPositions || points.count >= 2 {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Performance").font(.headline)
+                HStack {
+                    Text("Performance").font(.headline)
+                    Spacer()
+                    NavigationLink { PortfolioDetailView(engine: engine) } label: {
+                        Label("Details", systemImage: "chevron.right").labelStyle(.titleOnly)
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(MoneyFormat.string(total.amount, code: baseCurrency, showSign: true))
@@ -324,7 +331,10 @@ struct PortfolioPerformanceCard: View {
                         ForEach(PortfolioRange.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    chart(performance)
+                    // Tap the chart for the full breakdown.
+                    NavigationLink { PortfolioDetailView(engine: engine) } label: { chart(performance) }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens portfolio details")
                     HStack(alignment: .top) {
                         metric("Market gain", MoneyFormat.string(performance.marketGain, code: baseCurrency, showSign: true, fractionDigits: 0),
                                Theme.signColor(performance.marketGain))
@@ -335,7 +345,10 @@ struct PortfolioPerformanceCard: View {
                         }
                     }
                 } else {
-                    comparisonBars(invested: engine.portfolioCostBasis, value: engine.portfolioCostedValue)
+                    NavigationLink { PortfolioDetailView(engine: engine) } label: {
+                        comparisonBars(invested: engine.portfolioCostBasis, value: engine.portfolioCostedValue)
+                    }
+                    .buttonStyle(.plain)
                     Label("The chart over time starts filling in from tomorrow — one point a day.", systemImage: "clock")
                         .font(.caption).foregroundStyle(.secondary)
                 }

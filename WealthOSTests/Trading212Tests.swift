@@ -16,6 +16,7 @@ final class T212MockHTTP: HTTPClient, @unchecked Sendable {
         case .accountSummary: (200, T212Fixtures.summary, [:])
         case .positions: (200, T212Fixtures.positions, [:])
         case .instruments: (200, T212Fixtures.instruments, [:])
+        case .dividends, .orders, .transactions: (200, T212Fixtures.noDividends, [:])
         }
     }
     /// Awaited before replying, to hold a request "in flight".
@@ -61,6 +62,8 @@ nonisolated enum T212Fixtures {
 
     static let instruments = #"[{"addedOn":"2018-01-01T00:00:00Z","currencyCode":"USD","extendedHours":true,"isin":"US0378331005","maxOpenQuantity":1000,"name":"Apple","shortName":"AAPL","ticker":"AAPL_US_EQ","type":"STOCK","workingScheduleId":1},{"addedOn":"2019-01-01T00:00:00Z","currencyCode":"EUR","extendedHours":false,"isin":"IE00BK5BQT80","maxOpenQuantity":1000,"name":"Vanguard FTSE All-World","shortName":"VWCE","ticker":"VWCEd_EQ","type":"ETF","workingScheduleId":2}]"#
 
+    static let noDividends = #"{"items":[],"nextPagePath":null}"#
+
     static func decode<T: Decodable>(_ json: String) throws -> T { try JSONDecoder().decode(T.self, from: Data(json.utf8)) }
 }
 
@@ -98,11 +101,14 @@ struct Trading212ClientTests {
         #expect(!Trading212Credentials(apiKey: "key", apiSecret: " ").isComplete)
     }
 
-    @Test func onlyThreeReadOnlyEndpointsExist() {
+    @Test func onlySixReadOnlyEndpointsExist() {
         #expect(Set(Trading212Endpoint.allCases.map(\.path)) ==
-                ["/equity/account/summary", "/equity/positions", "/equity/metadata/instruments"])
+                ["/equity/account/summary", "/equity/positions", "/equity/metadata/instruments",
+                 "/equity/history/dividends", "/equity/history/orders", "/equity/history/transactions"])
+        // Trading endpoints (/equity/orders/…, pies) must never exist; order *history* is read-only.
         for endpoint in Trading212Endpoint.allCases {
-            #expect(!endpoint.path.contains("orders") && !endpoint.path.contains("pies"))
+            #expect(!endpoint.path.hasPrefix("/equity/orders") && !endpoint.path.contains("pies"))
+            #expect(!endpoint.path.contains("orders") || endpoint.path.hasPrefix("/equity/history/"))
         }
     }
 
@@ -116,6 +122,8 @@ struct Trading212ClientTests {
         let blocked = [
             request("https://live.trading212.com/api/v0/equity/orders/market", method: "POST", body: Data("{}".utf8)),
             request("https://live.trading212.com/api/v0/equity/orders/limit"),
+            request("https://live.trading212.com/api/v0/equity/orders"),
+            request("https://live.trading212.com/api/v0/equity/history/orders", method: "POST", body: Data("{}".utf8)),
             request("https://live.trading212.com/api/v0/equity/orders/1", method: "DELETE"),
             request("https://live.trading212.com/api/v0/equity/pies"),
             request("https://live.trading212.com/api/v0/equity/positions", method: "POST"),

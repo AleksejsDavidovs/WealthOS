@@ -135,12 +135,44 @@ enum Trading212Reconciler {
             }
         }
         for (ticker, row) in byTicker where !seen.contains(ticker) { context.delete(row) }
+
+        // Another account (or demo ↔ live): its history must not mix with this one.
+        if accountChanged {
+            for row in try context.fetch(FetchDescriptor<BrokerDividend>()) { context.delete(row) }
+            for row in try context.fetch(FetchDescriptor<BrokerOrder>()) { context.delete(row) }
+            for row in try context.fetch(FetchDescriptor<BrokerCashTransaction>()) { context.delete(row) }
+            for row in try context.fetch(FetchDescriptor<BrokerValuePoint>()) { context.delete(row) }
+        }
+        let positionsValue = positions.reduce(Decimal(0)) { $0 + ($1.currentValue ?? 0) }
+        try recordValuePoint(value: Money.round(snapshot.cashTotal + positionsValue), cash: Money.round(snapshot.cashTotal),
+                             currency: currency, now: now, in: context)
+    }
+
+    /// One point per calendar day (the latest sync of the day wins).
+    static func recordValuePoint(value: Decimal, cash: Decimal, currency: String, now: Date,
+                                 calendar: Calendar = .current, in context: ModelContext) throws {
+        let start = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return }
+        let today = try context.fetch(FetchDescriptor<BrokerValuePoint>(predicate: #Predicate { $0.date >= start && $0.date < end }))
+        if let point = today.first {
+            point.date = now
+            point.value = value
+            point.cash = cash
+            point.currencyCode = currency
+            for extra in today.dropFirst() { context.delete(extra) }
+        } else {
+            context.insert(BrokerValuePoint(date: now, currencyCode: currency, value: value, cash: cash))
+        }
     }
 
     static func removeAllData(in context: ModelContext) throws {
         for row in try context.fetch(FetchDescriptor<BrokerAccountSnapshot>()) { context.delete(row) }
         for row in try context.fetch(FetchDescriptor<BrokerPosition>()) { context.delete(row) }
         for row in try context.fetch(FetchDescriptor<BrokerLink>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<BrokerDividend>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<BrokerOrder>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<BrokerCashTransaction>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<BrokerValuePoint>()) { context.delete(row) }
     }
 
     static func setLinked(_ linked: Bool, kind: BrokerLink.Kind, localID: UUID, in context: ModelContext) throws {
@@ -259,6 +291,10 @@ final class Trading212Service {
     private(set) var lastError: Trading212Error?
     private(set) var lastFailureAt: Date?
     private(set) var environment: Trading212Environment
+    /// Last download failure per history feed (e.g. the key lacks that history scope). Kept
+    /// apart from `lastError`: balances keep syncing without history.
+    private(set) var historyErrors: [Trading212HistoryKind: Trading212Error] = [:]
+    var dividendError: Trading212Error? { historyErrors[.dividends] }
 
     /// Automatic syncs (opening Investments, returning to the app) only run when data is older.
     static let staleInterval: TimeInterval = 15 * 60
@@ -266,11 +302,20 @@ final class Trading212Service {
     static let minimumInterval: TimeInterval = 6
     /// Instrument metadata changes rarely and is limited to 1 request / 50 s.
     static let instrumentsInterval: TimeInterval = 24 * 3600
+    /// History (dividends, trades, cash movements) is re-checked at most every 6 hours, or on a manual sync.
+    static let dividendsInterval: TimeInterval = 6 * 3600
+    /// 50 items per page; the first download of a feed stops after this many pages.
+    static let historyMaxPages = 40
 
     private static let keyAccount = "apiKey"
     private static let secretAccount = "apiSecret"
     private static let environmentKey = "trading212Environment"
     private static let instrumentsFetchedKey = "trading212InstrumentsFetchedAt"
+    private static func historyFetchedKey(_ kind: Trading212HistoryKind) -> String { "trading212HistoryFetchedAt.\(kind.rawValue)" }
+
+    /// When a history feed was last downloaded successfully; nil = never.
+    func historyFetchedAt(_ kind: Trading212HistoryKind) -> Date? { defaults.object(forKey: Self.historyFetchedKey(kind)) as? Date }
+    var dividendsFetchedAt: Date? { historyFetchedAt(.dividends) }
 
     private let secrets: SecretStore
     private let http: HTTPClient
@@ -360,6 +405,7 @@ final class Trading212Service {
             self.environment = environment
             defaults.set(environment.rawValue, forKey: Self.environmentKey)
             credentialState = keychainPair.state()
+            await refreshHistory(client: client, force: true, started: started, context: context, now: now)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -385,10 +431,12 @@ final class Trading212Service {
         let started = generation
 
         do {
-            let snapshot = try await download(client: makeClient(credentials, environment), forceInstruments: false, context: context, now: now)
+            let client = makeClient(credentials, environment)
+            let snapshot = try await download(client: client, forceInstruments: false, context: context, now: now)
             // Disconnected while downloading: drop the result instead of resurrecting the data.
             guard started == generation, isConnected else { return false }
             try save(snapshot, environment: environment, now: now, context: context)
+            await refreshHistory(client: client, force: force, started: started, context: context, now: now)
             return true
         } catch is CancellationError {
             return false
@@ -421,6 +469,8 @@ final class Trading212Service {
         if removeData {
             try Persistence.commit(context) { try Trading212Reconciler.removeAllData(in: context) }
             defaults.removeObject(forKey: Self.instrumentsFetchedKey)
+            for kind in Trading212HistoryKind.allCases { defaults.removeObject(forKey: Self.historyFetchedKey(kind)) }
+            historyErrors = [:]
             DataMaintenance.refreshSnapshot(context: context, baseCurrency: Self.baseCurrency(defaults))
         }
     }
@@ -453,6 +503,77 @@ final class Trading212Service {
         let known = Set(((try? context?.fetch(FetchDescriptor<BrokerPosition>())) ?? [])
             .filter { !$0.instrumentType.isEmpty }.map(\.ticker))
         return positions.contains { !known.contains($0.ticker) }
+    }
+
+    /// Downloads each history feed newest first and stops at the first page that contains an
+    /// already stored item, so only the first download walks the whole history. Never fails
+    /// the balance sync: errors are kept per feed in `historyErrors`, stored rows stay as they were.
+    private func refreshHistory(client: Trading212Client, force: Bool, started: Int, context: ModelContext, now: Date) async {
+        for kind in Trading212HistoryKind.allCases {
+            guard started == generation, isConnected else { return }
+            await refresh(kind, client: client, force: force, started: started, context: context, now: now)
+        }
+    }
+
+    private func refresh(_ kind: Trading212HistoryKind, client: Trading212Client, force: Bool, started: Int,
+                         context: ModelContext, now: Date) async {
+        let error = historyErrors[kind]
+        if !force, error == nil, let last = historyFetchedAt(kind), now.timeIntervalSince(last) < Self.dividendsInterval { return }
+        // A key without the scope fails the same way every time; only a manual sync retries it.
+        if !force, error == .missingPermission { return }
+        do {
+            switch kind {
+            case .dividends:
+                let known = Set(try context.fetch(FetchDescriptor<BrokerDividend>()).map(\.key))
+                let items = try await walkPages(known: known) { cursor in
+                    let page = try await client.dividends(cursor: cursor)
+                    return (page.items ?? [], page.nextPagePath)
+                } keys: { Trading212DividendParsing.parse($0).map(\.key) }
+                guard started == generation, isConnected else { return }
+                let parsed = Trading212DividendParsing.parse(items)
+                try Persistence.commit(context, save: saveContext) { try Trading212DividendReconciler.apply(parsed, now: now, in: context) }
+            case .orders:
+                let known = Set(try context.fetch(FetchDescriptor<BrokerOrder>()).map(\.key))
+                let items = try await walkPages(known: known) { cursor in
+                    let page = try await client.orders(cursor: cursor)
+                    return (page.items ?? [], page.nextPagePath)
+                } keys: { Trading212HistoryParsing.orders($0).map(\.key) }
+                guard started == generation, isConnected else { return }
+                let parsed = Trading212HistoryParsing.orders(items)
+                try Persistence.commit(context, save: saveContext) { try Trading212HistoryReconciler.apply(orders: parsed, now: now, in: context) }
+            case .transactions:
+                let known = Set(try context.fetch(FetchDescriptor<BrokerCashTransaction>()).map(\.key))
+                let items = try await walkPages(known: known) { cursor in
+                    let page = try await client.transactions(cursor: cursor)
+                    return (page.items ?? [], page.nextPagePath)
+                } keys: { Trading212HistoryParsing.transactions($0).map(\.key) }
+                guard started == generation, isConnected else { return }
+                let parsed = Trading212HistoryParsing.transactions(items)
+                try Persistence.commit(context, save: saveContext) { try Trading212HistoryReconciler.apply(transactions: parsed, now: now, in: context) }
+            }
+            defaults.set(now, forKey: Self.historyFetchedKey(kind))
+            historyErrors[kind] = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            guard started == generation else { return }
+            historyErrors[kind] = (error as? Trading212Error) ?? (error is PersistenceError ? .localSaveFailed : .network)
+        }
+    }
+
+    /// Follows `nextPagePath` cursors until a page contains a known key, the feed ends or the page cap is hit.
+    private func walkPages<Item>(known: Set<String>, fetch: (String?) async throws -> ([Item], String?),
+                                 keys: ([Item]) -> [String]) async throws -> [Item] {
+        var all: [Item] = []
+        var cursor: String?
+        for _ in 0..<Self.historyMaxPages {
+            let (items, nextPath) = try await fetch(cursor)
+            all += items
+            if keys(items).contains(where: known.contains) { break }
+            guard !items.isEmpty, let next = Trading212Client.cursor(fromNextPagePath: nextPath), next != cursor else { break }
+            cursor = next
+        }
+        return all
     }
 
     /// Injectable for tests (e.g. a failing disk); always `context.save()` in the app.
