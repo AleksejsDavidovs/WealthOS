@@ -6,6 +6,10 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5A1D00000000000000000021 /* WealthOSWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5A1D00000000000000000001 /* WealthOSWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		8E436D45309DFFDC00538E31 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -14,12 +18,44 @@
 			remoteGlobalIDString = 000000000000000100000000;
 			remoteInfo = WealthOS;
 		};
+		5A1D00000000000000000022 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5A1D00000000000000000010;
+			remoteInfo = WealthOSWidgets;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5A1D00000000000000000020 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				5A1D00000000000000000021 /* WealthOSWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* WealthOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WealthOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8E436D3E309DFFDC00538E31 /* WealthOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WealthOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A1D00000000000000000001 /* WealthOSWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WealthOSWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5A1D00000000000000000004 /* Exceptions for "WealthOSWidgets" folder in "WealthOSWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5A1D00000000000000000010 /* WealthOSWidgets */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		000000000000000000000010 /* WealthOS */ = {
@@ -30,6 +66,19 @@
 		8E436D3F309DFFDC00538E31 /* WealthOSTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WealthOSTests;
+			sourceTree = "<group>";
+		};
+		5A1D00000000000000000002 /* WealthOSWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5A1D00000000000000000004 /* Exceptions for "WealthOSWidgets" folder in "WealthOSWidgets" target */,
+			);
+			path = WealthOSWidgets;
+			sourceTree = "<group>";
+		};
+		5A1D00000000000000000003 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -45,6 +94,11 @@
 			files = (
 			);
 		};
+		5A1D00000000000000000012 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -53,6 +107,8 @@
 			children = (
 				000000000000000000000010 /* WealthOS */,
 				8E436D3F309DFFDC00538E31 /* WealthOSTests */,
+				5A1D00000000000000000002 /* WealthOSWidgets */,
+				5A1D00000000000000000003 /* Shared */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -62,6 +118,7 @@
 			children = (
 				000000000000000000000120 /* WealthOS.app */,
 				8E436D3E309DFFDC00538E31 /* WealthOSTests.xctest */,
+				5A1D00000000000000000001 /* WealthOSWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,11 +133,16 @@
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
+				5A1D00000000000000000020 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
+			dependencies = (
+				5A1D00000000000000000023 /* PBXTargetDependency */,
+			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* WealthOS */,
+				5A1D00000000000000000003 /* Shared */,
 			);
 			name = WealthOS;
 			productName = WealthOS;
@@ -108,6 +170,25 @@
 			productReference = 8E436D3E309DFFDC00538E31 /* WealthOSTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		5A1D00000000000000000010 /* WealthOSWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5A1D00000000000000000014 /* Build configuration list for PBXNativeTarget "WealthOSWidgets" */;
+			buildPhases = (
+				5A1D00000000000000000011 /* Sources */,
+				5A1D00000000000000000012 /* Frameworks */,
+				5A1D00000000000000000013 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				5A1D00000000000000000002 /* WealthOSWidgets */,
+				5A1D00000000000000000003 /* Shared */,
+			);
+			name = WealthOSWidgets;
+			productName = WealthOSWidgets;
+			productReference = 5A1D00000000000000000001 /* WealthOSWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -122,6 +203,9 @@
 						CreatedOnToolsVersion = 26.3;
 					};
 					8E436D3D309DFFDC00538E31 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					5A1D00000000000000000010 = {
 						CreatedOnToolsVersion = 27.0;
 					};
 				};
@@ -142,6 +226,7 @@
 			targets = (
 				000000000000000100000000 /* WealthOS */,
 				8E436D3D309DFFDC00538E31 /* WealthOSTests */,
+				5A1D00000000000000000010 /* WealthOSWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -153,6 +238,11 @@
 			);
 		};
 		8E436D3C309DFFDC00538E31 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		5A1D00000000000000000013 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -170,6 +260,11 @@
 			files = (
 			);
 		};
+		5A1D00000000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -177,6 +272,11 @@
 			isa = PBXTargetDependency;
 			target = 000000000000000100000000 /* WealthOS */;
 			targetProxy = 8E436D45309DFFDC00538E31 /* PBXContainerItemProxy */;
+		};
+		5A1D00000000000000000023 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5A1D00000000000000000010 /* WealthOSWidgets */;
+			targetProxy = 5A1D00000000000000000022 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -317,6 +417,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WealthOS/WealthOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6LL34WZSDF;
@@ -360,6 +461,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WealthOS/WealthOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6LL34WZSDF;
@@ -451,6 +553,68 @@
 			};
 			name = Release;
 		};
+		5A1D00000000000000000015 /* Debug configuration for PBXNativeTarget "WealthOSWidgets" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WealthOSWidgets/WealthOSWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6LL34WZSDF;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WealthOSWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WealthOS;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = lv.davidovs.wealthos.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		5A1D00000000000000000016 /* Release configuration for PBXNativeTarget "WealthOSWidgets" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WealthOSWidgets/WealthOSWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6LL34WZSDF;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WealthOSWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WealthOS;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = lv.davidovs.wealthos.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -475,6 +639,14 @@
 			buildConfigurations = (
 				8E436D43309DFFDC00538E31 /* Debug configuration for PBXNativeTarget "WealthOSTests" */,
 				8E436D44309DFFDC00538E31 /* Release configuration for PBXNativeTarget "WealthOSTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		5A1D00000000000000000014 /* Build configuration list for PBXNativeTarget "WealthOSWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A1D00000000000000000015 /* Debug configuration for PBXNativeTarget "WealthOSWidgets" */,
+				5A1D00000000000000000016 /* Release configuration for PBXNativeTarget "WealthOSWidgets" */,
 			);
 			defaultConfigurationName = Release;
 		};

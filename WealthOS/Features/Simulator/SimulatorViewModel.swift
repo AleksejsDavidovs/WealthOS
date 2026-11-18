@@ -113,7 +113,7 @@ final class SimulatorViewModel {
     func update(_ change: (inout SimulationParameters) -> Void) {
         var copy = parameters
         change(&copy)
-        copy.years = min(max(copy.years, SimulationParameters.yearRange.lowerBound), SimulationParameters.yearRange.upperBound)
+        copy = copy.clamped
         guard copy != parameters else { return }
         parameters = copy
         recompute()
@@ -123,7 +123,8 @@ final class SimulatorViewModel {
 
     private func loadSelected() {
         guard let scenario = scenarios[selectedKind], let stored = scenario.parameters else { return }
-        parameters = stored
+        parameters = stored.clamped
+        if parameters != stored { schedulePersist() }
         recompute()
         recomputeComparison()
         monteCarlo = nil
@@ -138,7 +139,7 @@ final class SimulatorViewModel {
     /// Projects the other scenarios with the selected scenario's horizon so lines are comparable.
     func recomputeComparison() {
         for kind in ScenarioKind.allCases where kind != selectedKind {
-            guard var other = scenarios[kind]?.parameters else { continue }
+            guard var other = scenarios[kind]?.parameters?.clamped else { continue }
             other.years = parameters.years
             comparison[kind] = SimulationEngine.project(other, startDate: startDate)
         }

@@ -5,7 +5,6 @@ import Charts
 struct InvestmentsView: View {
     @Environment(AppModel.self) private var app
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
-    @Query(sort: \NetWorthSnapshot.date) private var snapshots: [NetWorthSnapshot]
     @State private var showHoldingEditor = false
     @State private var showRates = false
     @State private var selectedAngle: Double?
@@ -18,6 +17,7 @@ struct InvestmentsView: View {
     var body: some View {
         NavigationStack {
             FinanceReader { engine in
+                ScrollViewReader { scroller in
                 ScrollView {
                     VStack(spacing: 20) {
                         if app.isDemoMode { DemoBanner() }
@@ -28,7 +28,7 @@ struct InvestmentsView: View {
                                            symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
                         } else {
                             if engine.hasAnyPositions { allocationCard(engine) }
-                            historyCard
+                            PortfolioPerformanceCard(engine: engine).id("performance")
                             Trading212PortfolioCard(engine: engine)
                             BinancePortfolioCard(engine: engine)
                             if !engine.positions.isEmpty { holdingsList(engine) }
@@ -36,6 +36,15 @@ struct InvestmentsView: View {
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 24)
+                }
+                #if DEBUG
+                .onAppear {
+                    // Development aid: `-UIScrollTo performance` for visual checks.
+                    if ProcessInfo.processInfo.arguments.contains("-UIScrollTo") {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo("performance", anchor: .center) }
+                    }
+                }
+                #endif
                 }
                 .screenBackground()
                 .refreshable {
@@ -182,35 +191,6 @@ struct InvestmentsView: View {
             if selectedAngle <= cumulative { return item.assetClass }
         }
         return nil
-    }
-
-    @ViewBuilder
-    private var historyCard: some View {
-        let points = snapshots.filter { $0.currencyCode == baseCurrency && $0.investmentTotal != 0 }
-        if points.count >= 2 {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Investment Value History").font(.headline)
-                Text("From recorded daily snapshots (holdings + investment account balances).")
-                    .font(.caption).foregroundStyle(.secondary)
-                Chart(points) { point in
-                    LineMark(x: .value("Date", point.date), y: .value("Value", point.investmentTotal.doubleValue))
-                        .foregroundStyle(Color.purple)
-                        .interpolationMethod(.monotone)
-                    AreaMark(x: .value("Date", point.date), y: .value("Value", point.investmentTotal.doubleValue))
-                        .foregroundStyle(LinearGradient(colors: [.purple.opacity(0.3), .clear], startPoint: .top, endPoint: .bottom))
-                        .interpolationMethod(.monotone)
-                }
-                .chartYScale(domain: .automatic(includesZero: false))
-                .chartYAxis {
-                    AxisMarks(position: .trailing) { value in
-                        AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
-                        AxisValueLabel { if let v = value.as(Double.self) { Text(MoneyFormat.compact(v, code: baseCurrency)) } }
-                    }
-                }
-                .frame(height: 160)
-            }
-            .card()
-        }
     }
 
     private func holdingsList(_ engine: FinanceEngine) -> some View {

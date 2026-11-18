@@ -74,8 +74,23 @@ enum BackupService {
                              updatedAt: scenario.updatedAt)
             },
             external: try externalPayload(from: context),
-            planning: try planningPayload(from: context)
+            planning: try planningPayload(from: context),
+            portfolioHistory: try portfolioHistoryPayload(from: context)
         )
+    }
+
+    static func portfolioHistoryPayload(from context: ModelContext) throws -> [BackupPayload.PortfolioSnapshotDTO]? {
+        let points = try context.fetch(FetchDescriptor<PortfolioSnapshot>())
+        guard !points.isEmpty else { return nil }
+        return points.map { .init(id: $0.id, date: $0.date, currencyCode: $0.currencyCode, totalValue: $0.totalValue,
+                                  costedValue: $0.costedValue, costBasis: $0.costBasis, realized: $0.realized) }
+    }
+
+    static func insertPortfolioHistory(_ payload: BackupPayload, into context: ModelContext) {
+        for p in payload.portfolioHistory ?? [] {
+            context.insert(PortfolioSnapshot(id: p.id, date: p.date, currencyCode: p.currencyCode, totalValue: p.totalValue,
+                                             costedValue: p.costedValue, costBasis: p.costBasis, realized: p.realized))
+        }
     }
 
     static func planningPayload(from context: ModelContext) throws -> BackupPayload.PlanningDTO? {
@@ -263,6 +278,7 @@ enum BackupService {
             insertExternal(payload, into: context)
             insertBanking(payload, consents: consents, into: context)
             insertPlanning(payload, into: context)
+            insertPortfolioHistory(payload, into: context)
             try save(context)
         } catch {
             context.rollback()

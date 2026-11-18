@@ -267,8 +267,7 @@ struct SimulatorView: View {
 
     private var controlsCard: some View {
         let p = model.parameters
-        let incomeMax = max(10_000, (p.monthlyIncome.doubleValue * 2).rounded())
-        let expenseMax = max(10_000, (p.monthlyExpenses.doubleValue * 2).rounded())
+        let monthlyMax = SimulationParameters.sliderMonthlyMax
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("Assumptions").font(.headline)
@@ -279,11 +278,11 @@ struct SimulatorView: View {
                             value: Binding(get: { Double(p.years) }, set: { v in model.update { $0.years = Int(v.rounded()) } }),
                             range: 1...40, step: 1)
             ParameterSlider(title: "Monthly income", valueText: MoneyFormat.string(p.monthlyIncome, code: baseCurrency, fractionDigits: 0),
-                            value: money(\.monthlyIncome), range: 0...incomeMax, step: 50)
+                            value: money(\.monthlyIncome), range: 0...monthlyMax, step: 50)
             ParameterSlider(title: "Monthly expenses", valueText: MoneyFormat.string(p.monthlyExpenses, code: baseCurrency, fractionDigits: 0),
-                            value: money(\.monthlyExpenses), range: 0...expenseMax, step: 50)
+                            value: money(\.monthlyExpenses), range: 0...monthlyMax, step: 50)
             ParameterSlider(title: "Monthly investing", valueText: MoneyFormat.string(p.monthlyContribution, code: baseCurrency, fractionDigits: 0),
-                            value: money(\.monthlyContribution), range: 0...max(5_000, incomeMax / 2), step: 25,
+                            value: money(\.monthlyContribution), range: 0...SimulationParameters.sliderContributionMax, step: 25,
                             footnote: contributionFootnote)
             ParameterSlider(title: "Expected annual return", valueText: MoneyFormat.percent(p.annualReturn),
                             value: percent(\.annualReturn), range: -0.05...0.15, step: 0.0025)

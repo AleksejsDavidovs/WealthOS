@@ -85,7 +85,14 @@ struct ScenarioEditorView: View {
             let range: ClosedRange<Decimal> = field == .volatility ? 0...100 : (field.allowsNegative ? -50...50 : 0...50)
             return .percent(text, range: range)
         }
-        return .money(text, allowZero: true, allowNegative: field.allowsNegative)
+        let result = AmountValidation.money(text, allowZero: true, allowNegative: field.allowsNegative)
+        guard let value = result.value else { return result }
+        let limit = field == .startingCash || field == .startingInvestments
+            ? SimulationParameters.maxStartingBalance : SimulationParameters.maxMonthlyAmount
+        if abs(value) > limit {
+            return .invalid("Maximum is \(MoneyFormat.string(limit, code: baseCurrency, fractionDigits: 0)).")
+        }
+        return result
     }
 
     private var isValid: Bool { Field.allCases.allSatisfy { validation($0).value != nil } }

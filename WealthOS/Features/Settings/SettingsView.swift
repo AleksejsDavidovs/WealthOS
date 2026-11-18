@@ -4,12 +4,321 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var context
     @Environment(AppModel.self) private var app
-    @Environment(AppLockManager.self) private var lock
-    @AppStorage(SettingsKey.appearance) private var appearance = AppearanceMode.dark.rawValue
     @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     @AppStorage(SettingsKey.lockEnabled) private var lockEnabled = false
+    @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
+    @AppStorage(SettingsKey.budgetAlerts) private var budgetAlerts = false
+    @AppStorage(SettingsKey.subscriptionReminders) private var subscriptionReminders = false
+    @AppStorage(SettingsKey.monthlyReportNotification) private var reportNotification = false
+    @AppStorage(SettingsKey.bankConsentReminders) private var bankReminders = true
+    @Environment(Trading212Service.self) private var trading212
+    @Environment(BinanceService.self) private var binance
+    @Query private var bankConnections: [BankConnection]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if app.isDemoMode {
+                    Section {
+                        Label("You're exploring demo data. Nothing here is saved, and your real data is untouched.",
+                              systemImage: "theatermasks.fill")
+                        Button("Exit Demo Mode", role: .destructive) { app.exitDemoMode() }
+                    }
+                }
+
+                Section {
+                    NavigationLink { GeneralSettingsView() } label: {
+                        SettingsRow(title: "General", symbol: "gearshape.fill", value: baseCurrency)
+                    }
+                    NavigationLink { NotificationSettingsView() } label: {
+                        SettingsRow(title: "Notifications", symbol: "bell.badge.fill", value: notificationsText)
+                    }
+                    NavigationLink { SecuritySettingsView() } label: {
+                        SettingsRow(title: "Privacy & Security", symbol: "lock.shield.fill", value: lockEnabled ? "Locked" : nil)
+                    }
+                }
+
+                Section {
+                    NavigationLink { BankConnectionsSettingsView() } label: {
+                        SettingsRow(title: "Bank Connections", symbol: "building.columns.fill", value: bankStatusText)
+                    }
+                    NavigationLink { IntegrationsSettingsView() } label: {
+                        SettingsRow(title: "Investment Integrations", symbol: "chart.line.uptrend.xyaxis", value: integrationsText)
+                    }
+                }
+
+                Section {
+                    NavigationLink { AssumptionsSettingsView() } label: {
+                        SettingsRow(title: "Simulator Scenarios", symbol: "slider.horizontal.3")
+                    }
+                    NavigationLink { EstimatesSettingsView() } label: {
+                        SettingsRow(title: "Income & Expense Estimates", symbol: "eurosign.circle.fill")
+                    }
+                }
+
+                Section {
+                    NavigationLink { DataSettingsView(closeSettings: { dismiss() }) } label: {
+                        SettingsRow(title: "Data & Backup", symbol: "externaldrive.fill")
+                    }
+                }
+
+                Section {
+                    if !app.isDemoMode {
+                        Button { app.enterDemoMode(); dismiss() } label: { Label("Try Demo Mode", systemImage: "theatermasks") }
+                    }
+                    LabeledContent("Version", value: BackupService.appVersion)
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private var bankStatusText: String {
+        if bankConnections.isEmpty { return "Off" }
+        return bankConnections.allSatisfy { $0.isUsable() } ? "Connected" : "Reconnect"
+    }
+
+    private var integrationsText: String {
+        if trading212.needsReconnect || binance.needsReconnect { return "Reconnect" }
+        let connected = [trading212.isConnected, binance.isConnected].filter { $0 }.count
+        return connected == 0 ? (marketEnabled ? "Prices" : "Off") : "\(connected) connected"
+    }
+
+    private var notificationsText: String {
+        let on = [budgetAlerts, subscriptionReminders, reportNotification, bankReminders].filter { $0 }.count
+        return on == 0 ? "Off" : "\(on) on"
+    }
+}
+
+/// A Settings-app style row: icon in a rounded tile, title and an optional short status.
+struct SettingsRow: View {
+    let title: String
+    let symbol: String
+    var value: String?
+
+    var body: some View {
+        LabeledContent {
+            if let value { Text(value) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 29, height: 29)
+                    .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .accessibilityHidden(true)
+                Text(title)
+            }
+        }
+    }
+}
+
+// MARK: - General
+
+struct GeneralSettingsView: View {
+    @Environment(\.modelContext) private var context
+    @AppStorage(SettingsKey.appearance) private var appearance = AppearanceMode.dark.rawValue
+    @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
+    @State private var pendingCurrency: String?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearance) {
+                    ForEach(AppearanceMode.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section {
+                Picker("Base Currency", selection: Binding(get: { baseCurrency }, set: { pendingCurrency = $0 })) {
+                    ForEach(Currencies.supported, id: \.self) { Text("\($0) – \(Currencies.name(for: $0))").tag($0) }
+                }
+                NavigationLink("Exchange Rates") { ExchangeRatesView() }
+            } header: {
+                Text("Currency")
+            } footer: {
+                Text("Totals are shown in your base currency using the exchange rates in WealthOS.")
+            }
+        }
+        .navigationTitle("General")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Change base currency to \(pendingCurrency ?? "")?", isPresented: Binding(
+            get: { pendingCurrency != nil }, set: { if !$0 { pendingCurrency = nil } }), titleVisibility: .visible) {
+            Button("Change Currency") { changeCurrency() }
+        } message: {
+            Text("Account currencies stay the same. Exchange rates are converted where possible; otherwise enter new rates. Net worth history recorded in \(baseCurrency) stays saved but only snapshots in the active base currency are charted.")
+        }
+        .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(errorMessage ?? "") }
+    }
+
+    private func changeCurrency() {
+        guard let newCurrency = pendingCurrency else { return }
+        do {
+            try LedgerService.rebaseRates(from: baseCurrency, to: newCurrency, in: context)
+            baseCurrency = newCurrency
+            DataMaintenance.refreshSnapshot(context: context, baseCurrency: newCurrency)
+        } catch {
+            errorMessage = "The currency couldn't be changed."
+        }
+        pendingCurrency = nil
+    }
+}
+
+// MARK: - Notifications
+
+struct NotificationSettingsView: View {
+    var body: some View {
+        Form { PlanningNotificationSettings() }
+            .navigationTitle("Notifications")
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Privacy & Security
+
+struct SecuritySettingsView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(AppLockManager.self) private var lock
+    @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
+    @AppStorage(SettingsKey.lockEnabled) private var lockEnabled = false
+    @AppStorage(SettingsKey.widgetHidesAmounts) private var widgetHidesAmounts = true
+    @State private var showPINSetup = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: Binding(get: { lockEnabled }, set: { newValue in
+                    Task {
+                        guard await lock.setLockEnabled(newValue) else { return }
+                        lockEnabled = newValue
+                        // First-time protection: offer the PIN backup right away (skippable).
+                        if newValue && !lock.isPINEnabled { showPINSetup = true }
+                    }
+                })) {
+                    Label("\(lock.biometryName) Lock", systemImage: lock.biometrySymbol)
+                }
+
+                if lockEnabled {
+                    if lock.isPINEnabled {
+                        Button { authorizePINChange { showPINSetup = true } } label: {
+                            Label("Change App PIN", systemImage: "number")
+                        }
+                        Button("Turn Off App PIN", role: .destructive) {
+                            authorizePINChange {
+                                do { try lock.disablePIN() } catch { errorMessage = error.localizedDescription }
+                            }
+                        }
+                    } else {
+                        Button { authorizePINChange { showPINSetup = true } } label: {
+                            Label("Set Up App PIN", systemImage: "number")
+                        }
+                    }
+                }
+            } header: {
+                Text("App Lock")
+            } footer: {
+                Text(lock.errorMessage ?? "Locks WealthOS whenever it goes to the background. Falls back to your device passcode. The app content is hidden in the app switcher. An optional 6-digit PIN is available as a backup when \(lock.biometryName) isn't available.")
+            }
+
+            Section {
+                Toggle(isOn: Binding(get: { widgetHidesAmounts }, set: { newValue in
+                    widgetHidesAmounts = newValue
+                    DataMaintenance.refreshSnapshot(context: context, baseCurrency: baseCurrency)
+                })) {
+                    Label("Hide Amounts Until Tapped", systemImage: "eye.slash")
+                }
+            } header: {
+                Text("Widgets")
+            } footer: {
+                Text(widgetHidesAmounts
+                     ? "Home Screen widgets show •••• — tap a widget to see the amounts for 30 seconds, without opening the app. On the Lock Screen, amounts appear once you unlock with Face ID."
+                     : "Widgets always show amounts; tapping one opens WealthOS. On the Lock Screen, amounts appear once you unlock with Face ID.")
+            }
+
+            Section {
+                NavigationLink { PrivacyInfoView() } label: { Label("How WealthOS Handles Your Data", systemImage: "hand.raised.fill") }
+            }
+        }
+        .navigationTitle("Privacy & Security")
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showPINSetup) { PINSetupView() }
+        .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(errorMessage ?? "") }
+    }
+
+    /// Being inside the unlocked app isn't enough to set, change or remove the PIN — whoever
+    /// holds the phone must prove they're the device owner first.
+    private func authorizePINChange(_ action: @escaping () -> Void) {
+        Task {
+            if await lock.reauthorize(reason: "Change your WealthOS PIN settings") { action() }
+        }
+    }
+}
+
+// MARK: - Investment integrations
+
+struct IntegrationsSettingsView: View {
+    @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
+    @Environment(Trading212Service.self) private var trading212
+    @Environment(BinanceService.self) private var binance
+
+    var body: some View {
+        Form {
+            Section {
+                NavigationLink { Trading212SettingsView() } label: {
+                    LabeledContent {
+                        Text(trading212.isConnected ? (trading212.needsReconnect ? "Reconnect" : "Connected") : "Off")
+                    } label: {
+                        Label("Trading 212", systemImage: "building.columns")
+                    }
+                }
+                NavigationLink { BinanceSettingsView() } label: {
+                    LabeledContent {
+                        Text(binance.isConnected ? (binance.needsReconnect ? "Reconnect" : "Connected") : "Off")
+                    } label: {
+                        Label("Binance", systemImage: "bitcoinsign.circle")
+                    }
+                }
+            } header: {
+                Text("Brokers & Exchanges")
+            } footer: {
+                Text("Read-only sync of your Trading 212 cash and positions and your Binance crypto. WealthOS can't place orders or move money.")
+            }
+
+            Section {
+                NavigationLink { MarketDataSettingsView() } label: {
+                    LabeledContent {
+                        Text(marketEnabled ? "On" : "Off")
+                    } label: {
+                        Label("Market Data", systemImage: "network")
+                    }
+                }
+            } footer: {
+                Text(marketEnabled
+                     ? "Public prices from CoinGecko, Alpha Vantage and Frankfurter. Only symbols are sent."
+                     : "Off — WealthOS makes no network requests. Prices are entered manually.")
+            }
+        }
+        .navigationTitle("Investment Integrations")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Data & Backup
+
+struct DataSettingsView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(AppModel.self) private var app
+    @AppStorage(SettingsKey.baseCurrency) private var baseCurrency = "EUR"
     @AppStorage(SettingsKey.hasCompletedOnboarding) private var hasCompletedOnboarding = false
     @AppStorage(SettingsKey.marketDataEnabled) private var marketEnabled = false
     @Environment(MarketDataService.self) private var market
@@ -18,12 +327,12 @@ struct SettingsView: View {
     @Environment(BankingService.self) private var banking
 
     @Query private var transactions: [TransactionRecord]
-    @Query private var bankConnections: [BankConnection]
     @Query private var accounts: [Account]
     @Query private var categories: [TransactionCategory]
 
-    @State private var pendingCurrency: String?
-    @State private var showPINSetup = false
+    /// Closes the whole Settings sheet (after a reset).
+    let closeSettings: () -> Void
+
     @State private var showBackupExport = false
     @State private var showBackupImporter = false
     @State private var backupFileData: IdentifiedData?
@@ -37,211 +346,76 @@ struct SettingsView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        NavigationStack {
-            Form {
-                if app.isDemoMode {
-                    Section {
-                        Label("You're exploring demo data. Nothing here is saved, and your real data is untouched.",
-                              systemImage: "theatermasks.fill")
-                        Button("Exit Demo Mode", role: .destructive) { app.exitDemoMode() }
-                    }
-                }
-
-                Section("Appearance") {
-                    Picker("Theme", selection: $appearance) {
-                        ForEach(AppearanceMode.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section {
-                    Picker("Base Currency", selection: Binding(get: { baseCurrency }, set: { pendingCurrency = $0 })) {
-                        ForEach(Currencies.supported, id: \.self) { Text("\($0) – \(Currencies.name(for: $0))").tag($0) }
-                    }
-                    NavigationLink("Exchange Rates") { ExchangeRatesView() }
-                } header: {
-                    Text("Currency")
-                } footer: {
-                    Text("Totals are shown in your base currency using the exchange rates in WealthOS.")
-                }
-
-                Section {
-                    NavigationLink { MarketDataSettingsView() } label: {
-                        LabeledContent {
-                            Text(marketEnabled ? "On" : "Off")
-                        } label: {
-                            Label("Market Data", systemImage: "network")
-                        }
-                    }
-                } footer: {
-                    Text(marketEnabled
-                         ? "Public prices from CoinGecko, Alpha Vantage and Frankfurter. Only symbols are sent."
-                         : "Off — WealthOS makes no network requests. Prices are entered manually.")
-                }
-
-                Section {
-                    NavigationLink { Trading212SettingsView() } label: {
-                        LabeledContent {
-                            Text(trading212.isConnected ? (trading212.needsReconnect ? "Reconnect" : "Connected") : "Off")
-                        } label: {
-                            Label("Trading 212", systemImage: "building.columns")
-                        }
-                    }
-                    NavigationLink { BinanceSettingsView() } label: {
-                        LabeledContent {
-                            Text(binance.isConnected ? (binance.needsReconnect ? "Reconnect" : "Connected") : "Off")
-                        } label: {
-                            Label("Binance", systemImage: "bitcoinsign.circle")
-                        }
-                    }
-                } header: {
-                    Text("Integrations")
-                } footer: {
-                    Text("Read-only sync of your Trading 212 cash and positions and your Binance crypto. WealthOS can't place orders or move money.")
-                }
-
-                PlanningNotificationSettings()
-
-                Section {
-                    NavigationLink { BankConnectionsSettingsView() } label: {
-                        LabeledContent {
-                            Text(bankStatusText)
-                        } label: {
-                            Label("Bank Connections", systemImage: "building.columns.circle")
-                        }
-                    }
-                } footer: {
-                    Text("Read-only Swedbank (Latvia) balances and transactions via Open Banking (Enable Banking). No payments.")
-                }
-
-                Section {
-                    Toggle(isOn: Binding(get: { lockEnabled }, set: { newValue in
-                        Task {
-                            guard await lock.setLockEnabled(newValue) else { return }
-                            lockEnabled = newValue
-                            // First-time protection: offer the PIN backup right away (skippable).
-                            if newValue && !lock.isPINEnabled { showPINSetup = true }
-                        }
-                    })) {
-                        Label("\(lock.biometryName) Lock", systemImage: lock.biometrySymbol)
-                    }
-
-                    if lockEnabled {
-                        if lock.isPINEnabled {
-                            Button { authorizePINChange { showPINSetup = true } } label: {
-                                Label("Change App PIN", systemImage: "number")
-                            }
-                            Button("Turn Off App PIN", role: .destructive) {
-                                authorizePINChange {
-                                    do { try lock.disablePIN() } catch { errorMessage = error.localizedDescription }
-                                }
-                            }
-                        } else {
-                            Button { authorizePINChange { showPINSetup = true } } label: {
-                                Label("Set Up App PIN", systemImage: "number")
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Security")
-                } footer: {
-                    Text(lock.errorMessage ?? "Locks WealthOS whenever it goes to the background. Falls back to your device passcode. The app content is hidden in the app switcher. An optional 6-digit PIN is available as a backup when \(lock.biometryName) isn't available.")
-                }
-
-                Section {
-                    NavigationLink { AssumptionsSettingsView() } label: {
-                        Label("Simulator Scenarios", systemImage: "slider.horizontal.3")
-                    }
-                    NavigationLink { EstimatesSettingsView() } label: {
-                        Label("Income & Expense Estimates", systemImage: "eurosign.circle")
-                    }
-                } header: {
-                    Text("Financial Assumptions")
-                }
-
-                Section {
-                    Button { showBackupExport = true } label: { Label("Export Encrypted Backup", systemImage: "lock.doc") }
-                    Button { showBackupImporter = true } label: { Label("Restore from Backup", systemImage: "arrow.counterclockwise.circle") }
-                    Button { exportCSV() } label: { Label("Export Transactions (CSV)", systemImage: "tablecells") }
-                    Button { showCSVImporter = true } label: { Label("Import Transactions (CSV)", systemImage: "square.and.arrow.down") }
-                    Button { integrityReport = BackupService.integrityReport(for: context, baseCurrency: baseCurrency) } label: {
-                        Label("Check Data Integrity", systemImage: "checkmark.shield")
-                    }
-                } header: {
-                    Text("Backup & Data")
-                } footer: {
-                    Text(app.isDemoMode ? "Backup and import are disabled in demo mode." :
-                            "Backups are encrypted with your password (AES-256-GCM, PBKDF2-SHA256). CSV exports are NOT encrypted — store them carefully.")
-                }
-                .disabled(app.isDemoMode)
-
-                Section {
-                    if !app.isDemoMode {
-                        Button { app.enterDemoMode(); dismiss() } label: { Label("Try Demo Mode", systemImage: "theatermasks") }
-                    }
-                    NavigationLink { PrivacyInfoView() } label: { Label("Privacy", systemImage: "hand.raised.fill") }
-                    LabeledContent("Version", value: BackupService.appVersion)
-                }
-
-                Section {
-                    Button("Reset All Data", role: .destructive) { showResetConfirmation = true }
-                        .disabled(app.isDemoMode)
-                } footer: {
-                    Text("Permanently deletes all accounts, transactions, investments, goals and scenarios from this device.")
-                }
+        Form {
+            Section {
+                Button { showBackupExport = true } label: { Label("Export Encrypted Backup", systemImage: "lock.doc") }
+                Button { showBackupImporter = true } label: { Label("Restore from Backup", systemImage: "arrow.counterclockwise.circle") }
+            } header: {
+                Text("Backup")
+            } footer: {
+                Text(app.isDemoMode ? "Backup and import are disabled in demo mode." :
+                        "Backups are encrypted with your password (AES-256-GCM, PBKDF2-SHA256).")
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .fullScreenCover(isPresented: $showPINSetup) { PINSetupView() }
-            .sheet(isPresented: $showBackupExport) { BackupExportView() }
-            .sheet(item: $backupFileData) { BackupRestoreView(data: $0.data) }
-            .sheet(item: $csvFileData) { CSVImportView(data: $0.data) }
-            .fileImporter(isPresented: $showBackupImporter, allowedContentTypes: [.data]) { result in
-                handleImport(result) { backupFileData = $0 }
-            }
-            .fileImporter(isPresented: $showCSVImporter, allowedContentTypes: [.commaSeparatedText, .plainText, .text]) { result in
-                handleImport(result) { csvFileData = $0 }
-            }
-            .sheet(item: Binding(get: { csvExportURL.map(IdentifiedURL.init) }, set: { csvExportURL = $0?.url })) { item in
-                ExportReadyView(url: item.url, title: "CSV Export Ready",
-                                message: "This file contains your transactions in plain text. Share it only with places you trust.")
-            }
-            .confirmationDialog("Change base currency to \(pendingCurrency ?? "")?", isPresented: Binding(
-                get: { pendingCurrency != nil }, set: { if !$0 { pendingCurrency = nil } }), titleVisibility: .visible) {
-                Button("Change Currency") { changeCurrency() }
-            } message: {
-                Text("Account currencies stay the same. Exchange rates are converted where possible; otherwise enter new rates. Net worth history recorded in \(baseCurrency) stays saved but only snapshots in the active base currency are charted.")
-            }
-            .alert("Data Integrity", isPresented: Binding(get: { integrityReport != nil }, set: { if !$0 { integrityReport = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if let report = integrityReport {
-                    Text(report.isHealthy ? "No problems found. All references and values are consistent." : report.issues.joined(separator: "\n"))
+            .disabled(app.isDemoMode)
+
+            Section {
+                Button { exportCSV() } label: { Label("Export Transactions (CSV)", systemImage: "tablecells") }
+                Button { showCSVImporter = true } label: { Label("Import Transactions (CSV)", systemImage: "square.and.arrow.down") }
+                Button { integrityReport = BackupService.integrityReport(for: context, baseCurrency: baseCurrency) } label: {
+                    Label("Check Data Integrity", systemImage: "checkmark.shield")
                 }
+            } header: {
+                Text("Data")
+            } footer: {
+                Text("CSV exports are NOT encrypted — store them carefully.")
             }
-            .confirmationDialog("Reset all data?", isPresented: $showResetConfirmation, titleVisibility: .visible) {
-                Button("Export Backup First") { showBackupExport = true }
-                Button("Continue to Reset", role: .destructive) { resetText = ""; showResetFinal = true }
-            } message: {
-                Text("This permanently deletes everything stored in WealthOS on this device. It can't be undone.")
+            .disabled(app.isDemoMode)
+
+            Section {
+                Button("Reset All Data", role: .destructive) { showResetConfirmation = true }
+                    .disabled(app.isDemoMode)
+            } footer: {
+                Text("Permanently deletes all accounts, transactions, investments, goals and scenarios from this device.")
             }
-            .alert("Type RESET to confirm", isPresented: $showResetFinal) {
-                TextField("RESET", text: $resetText)
-                Button("Cancel", role: .cancel) {}
-                Button("Delete Everything", role: .destructive) { resetAllData() }
-            } message: {
-                Text("All data will be erased.")
-            }
-            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: { Text(errorMessage ?? "") }
         }
-    }
-
-    private var bankStatusText: String {
-        if bankConnections.isEmpty { return "Off" }
-        return bankConnections.allSatisfy { $0.isUsable() } ? "Connected" : "Reconnect"
+        .navigationTitle("Data & Backup")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showBackupExport) { BackupExportView() }
+        .sheet(item: $backupFileData) { BackupRestoreView(data: $0.data) }
+        .sheet(item: $csvFileData) { CSVImportView(data: $0.data) }
+        .fileImporter(isPresented: $showBackupImporter, allowedContentTypes: [.data]) { result in
+            handleImport(result) { backupFileData = $0 }
+        }
+        .fileImporter(isPresented: $showCSVImporter, allowedContentTypes: [.commaSeparatedText, .plainText, .text]) { result in
+            handleImport(result) { csvFileData = $0 }
+        }
+        .sheet(item: Binding(get: { csvExportURL.map(IdentifiedURL.init) }, set: { csvExportURL = $0?.url })) { item in
+            ExportReadyView(url: item.url, title: "CSV Export Ready",
+                            message: "This file contains your transactions in plain text. Share it only with places you trust.")
+        }
+        .alert("Data Integrity", isPresented: Binding(get: { integrityReport != nil }, set: { if !$0 { integrityReport = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let report = integrityReport {
+                Text(report.isHealthy ? "No problems found. All references and values are consistent." : report.issues.joined(separator: "\n"))
+            }
+        }
+        .confirmationDialog("Reset all data?", isPresented: $showResetConfirmation, titleVisibility: .visible) {
+            Button("Export Backup First") { showBackupExport = true }
+            Button("Continue to Reset", role: .destructive) { resetText = ""; showResetFinal = true }
+        } message: {
+            Text("This permanently deletes everything stored in WealthOS on this device. It can't be undone.")
+        }
+        .alert("Type RESET to confirm", isPresented: $showResetFinal) {
+            TextField("RESET", text: $resetText)
+            Button("Cancel", role: .cancel) {}
+            Button("Delete Everything", role: .destructive) { resetAllData() }
+        } message: {
+            Text("All data will be erased.")
+        }
+        .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(errorMessage ?? "") }
     }
 
     private func handleImport(_ result: Result<URL, Error>, completion: (IdentifiedData) -> Void) {
@@ -257,14 +431,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Being inside the unlocked app isn't enough to set, change or remove the PIN — whoever
-    /// holds the phone must prove they're the device owner first.
-    private func authorizePINChange(_ action: @escaping () -> Void) {
-        Task {
-            if await lock.reauthorize(reason: "Change your WealthOS PIN settings") { action() }
-        }
-    }
-
     private func exportCSV() {
         let csv = CSVService.export(transactions: transactions, accounts: accounts, categories: categories)
         do {
@@ -275,18 +441,6 @@ struct SettingsView: View {
         } catch {
             errorMessage = "The CSV file couldn't be created."
         }
-    }
-
-    private func changeCurrency() {
-        guard let newCurrency = pendingCurrency else { return }
-        do {
-            try LedgerService.rebaseRates(from: baseCurrency, to: newCurrency, in: context)
-            baseCurrency = newCurrency
-            DataMaintenance.refreshSnapshot(context: context, baseCurrency: newCurrency)
-        } catch {
-            errorMessage = "The currency couldn't be changed."
-        }
-        pendingCurrency = nil
     }
 
     private func resetAllData() {
@@ -315,7 +469,7 @@ struct SettingsView: View {
             if keychainProblem {
                 errorMessage = "Your data was erased, but an API key couldn't be removed from the Keychain. Open Integrations and disconnect again."
             } else {
-                dismiss()
+                closeSettings()
             }
         } catch {
             context.rollback()
@@ -323,6 +477,7 @@ struct SettingsView: View {
         }
     }
 }
+
 
 struct IdentifiedData: Identifiable {
     let id = UUID()

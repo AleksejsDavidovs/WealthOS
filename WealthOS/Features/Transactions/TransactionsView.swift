@@ -67,6 +67,7 @@ struct TransactionsView: View {
     @State private var showAnalytics = false
     @State private var showBudgets = false
     @State private var showSubscriptions = false
+    @State private var showReport = false
     #if DEBUG
     @State private var showDebugCategoryEditor = false
     #endif
@@ -160,6 +161,7 @@ struct TransactionsView: View {
                         NavigationLink { AnalyticsView() } label: { Label("Analytics", systemImage: "chart.pie") }
                         NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.33percent") }
                         NavigationLink { SubscriptionsView() } label: { Label("Subscriptions", systemImage: "repeat.circle") }
+                        NavigationLink { MonthlyReportView() } label: { Label("Monthly Report", systemImage: "doc.text") }
                         NavigationLink { RecurringRulesView() } label: { Label("Recurring", systemImage: "repeat") }
                         NavigationLink { CategoryManagerView() } label: { Label("Categories", systemImage: "square.grid.2x2") }
                     } label: {
@@ -189,6 +191,7 @@ struct TransactionsView: View {
             .navigationDestination(isPresented: $showAnalytics) { AnalyticsView(filter: filter) }
             .navigationDestination(isPresented: $showBudgets) { BudgetsView() }
             .navigationDestination(isPresented: $showSubscriptions) { SubscriptionsView() }
+            .navigationDestination(isPresented: $showReport) { MonthlyReportView() }
             #if DEBUG
             .onAppear {
                 // Development aid: `-UIScreen analytics|categoryEditor` (see AppModel).
@@ -197,6 +200,7 @@ struct TransactionsView: View {
                 case "analyticsMonth": filter.range = .thisMonth; showAnalytics = true
                 case "budgets": showBudgets = true
                 case "subscriptions": showSubscriptions = true
+                case "report": showReport = true
                 case "categoryEditor": showDebugCategoryEditor = true
                 default: break
                 }

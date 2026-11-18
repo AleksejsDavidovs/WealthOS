@@ -308,18 +308,29 @@ struct BudgetEditorView: View {
 struct PlanningNotificationSettings: View {
     @AppStorage(SettingsKey.budgetAlerts) private var budgetAlerts = false
     @AppStorage(SettingsKey.subscriptionReminders) private var reminders = false
+    @AppStorage(SettingsKey.monthlyReportNotification) private var report = false
+    @AppStorage(SettingsKey.bankConsentReminders) private var bankAccess = true
     @State private var denied = false
 
     var body: some View {
         Section {
             Toggle(isOn: binding($budgetAlerts)) { Label("Budget alerts", systemImage: "gauge.with.dots.needle.67percent") }
             Toggle(isOn: binding($reminders)) { Label("Subscription reminders", systemImage: "bell.badge") }
+            Toggle(isOn: binding($report)) { Label("Monthly report", systemImage: "doc.text") }
+            Toggle(isOn: Binding(get: { bankAccess }, set: { newValue in
+                if newValue {
+                    binding($bankAccess).wrappedValue = true
+                } else {
+                    bankAccess = false
+                    Task { await PlanningMonitor.notifier.removePending(prefix: "consent.") }
+                }
+            })) { Label("Bank access reminders", systemImage: "building.columns") }
         } header: {
             Text("Notifications")
         } footer: {
             Text(denied
                  ? "Notifications are turned off for WealthOS in iOS Settings → Notifications."
-                 : "Budget alerts at 80 % and 100 % of a monthly budget, once each per month. Reminders the day before a confirmed subscription renews. Notifications are created on this iPhone and never show amounts.")
+                 : "Budget alerts at 80 % and 100 % of a monthly budget, once each per month. Reminders the day before a confirmed subscription renews. The monthly report on the 1st. A reminder 7 days and 1 day before your bank access expires. Notifications are created on this iPhone and never show amounts.")
         }
     }
 

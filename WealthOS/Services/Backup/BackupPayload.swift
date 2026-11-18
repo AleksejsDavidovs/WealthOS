@@ -25,6 +25,8 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
     var external: ExternalDTO? = nil
     /// Budgets and subscription decisions (optional; absent in backups made before budgets).
     var planning: PlanningDTO? = nil
+    /// Daily portfolio points for performance history (optional; absent in older backups).
+    var portfolioHistory: [PortfolioSnapshotDTO]? = nil
 
     var recordCount: Int {
         accounts.count + transactions.count + categories.count + recurringRules.count + holdings.count
@@ -76,6 +78,9 @@ nonisolated struct BackupPayload: Codable, Equatable, Sendable {
         var id: UUID, kind: String, name: String, parameters: SimulationParameters, updatedAt: Date
     }
 
+    struct PortfolioSnapshotDTO: Codable, Equatable, Sendable {
+        var id: UUID, date: Date, currencyCode: String, totalValue: Decimal, costedValue: Decimal, costBasis: Decimal, realized: Decimal
+    }
     struct PlanningDTO: Codable, Equatable, Sendable {
         var budgets: [BudgetDTO]
         var subscriptionDecisions: [SubscriptionDecisionDTO]
@@ -203,6 +208,7 @@ nonisolated extension BackupPayload {
         try unique(trades.map(\.id), "trade")
         try unique(goals.map(\.id), "goal")
         try unique(rates.map(\.code), "exchange rate")
+        if let portfolioHistory { try unique(portfolioHistory.map(\.id), "portfolio snapshot") }
         if let planning {
             try unique(planning.budgets.map(\.id), "budget")
             try unique(planning.subscriptionDecisions.map(\.key), "subscription decision")

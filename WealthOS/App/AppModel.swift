@@ -117,13 +117,15 @@ enum DataMaintenance {
         let engine = makeEngine(context: context, baseCurrency: baseCurrency)
         // Budget thresholds and subscription reminders: real data only — never the in-memory
         // demo store or a test host.
+        let hasData = !engine.accounts.isEmpty || !engine.holdings.isEmpty
+            || engine.broker.snapshot != nil || engine.binance.snapshot != nil
         if !Persistence.isHostingTests(), context.container.configurations.contains(where: { !$0.isStoredInMemoryOnly }) {
             PlanningMonitor.run(context: context, engine: engine)
+            WidgetPublisher.publish(context: context, engine: engine, currency: baseCurrency, hasData: hasData)
         }
+        SnapshotService.recordPortfolioSnapshot(engine: engine, currencyCode: baseCurrency, in: context)
         return SnapshotService.recordAutomaticSnapshot(summary: engine.summary, currencyCode: baseCurrency,
-                                                hasData: !engine.accounts.isEmpty || !engine.holdings.isEmpty
-                                                    || engine.broker.snapshot != nil || engine.binance.snapshot != nil,
-                                                in: context)
+                                                hasData: hasData, in: context)
     }
 }
 
