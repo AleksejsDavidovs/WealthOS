@@ -11,7 +11,8 @@ enum Persistence {
         BrokerAccountSnapshot.self, BrokerPosition.self, BrokerLink.self,
         BinanceAccountSnapshot.self, BinanceHolding.self, BinanceLink.self,
         BankConnection.self, BankAccountLink.self, BankTransaction.self, BankCounterpartyRule.self,
-        Budget.self, SubscriptionDecision.self, PortfolioSnapshot.self
+        Budget.self, SubscriptionDecision.self, PortfolioSnapshot.self, BrokerDividend.self,
+        BrokerOrder.self, BrokerCashTransaction.self, BrokerValuePoint.self
     ]
 
     static var schema: Schema { Schema(modelTypes) }
@@ -134,6 +135,8 @@ enum SettingsKey {
     /// Defaults to on (unset = on): bank access is lost silently otherwise.
     static let bankConsentReminders = "bankConsentRemindersEnabled"
     static let widgetHidesAmounts = "widgetHidesAmounts"
+    /// Company logos from Trading 212's public image server (on unless turned off).
+    static let companyLogos = "companyLogosEnabled"
     /// The month ("2026-10") whose report the user last opened or dismissed on Home.
     static let lastSeenReportMonth = "lastSeenReportMonth"
 }

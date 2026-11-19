@@ -249,6 +249,8 @@ struct BinanceSettingsView: View {
 /// the Simulator, so every screen shows the same numbers.
 struct BinancePortfolioCard: View {
     let engine: FinanceEngine
+    /// Inside a collapsible Investments section: no own header or card background.
+    var embedded = false
     @Environment(BinanceService.self) private var service
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
@@ -257,8 +259,10 @@ struct BinancePortfolioCard: View {
     var body: some View {
         if let snapshot = engine.binance.snapshot {
             VStack(alignment: .leading, spacing: 10) {
-                SectionHeader("Binance") {
-                    NavigationLink("Manage") { BinanceSettingsView() }.font(.subheadline.weight(.medium))
+                if !embedded {
+                    SectionHeader("Binance") {
+                        NavigationLink("Manage") { BinanceSettingsView() }.font(.subheadline.weight(.medium))
+                    }
                 }
                 VStack(alignment: .leading, spacing: 14) {
                     header(snapshot)
@@ -279,8 +283,20 @@ struct BinancePortfolioCard: View {
                     } else {
                         Text("No crypto balances on Binance.").font(.subheadline).foregroundStyle(.secondary)
                     }
+                    if embedded {
+                        Divider()
+                        NavigationLink { BinanceSettingsView() } label: {
+                            HStack {
+                                Label("Manage Binance", systemImage: "gearshape").font(.subheadline.weight(.medium))
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .card(padding: 14)
+                .embeddedCard(embedded)
             }
         }
     }

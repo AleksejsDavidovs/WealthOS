@@ -403,6 +403,7 @@ struct CashFlowCard: View {
     let engine: FinanceEngine
     let code: String
     let title: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let totals = computeTotals()
@@ -420,7 +421,7 @@ struct CashFlowCard: View {
                 Text("Net cash flow").font(.caption).foregroundStyle(.secondary)
                 Text(MoneyFormat.string(net, code: code, showSign: net != 0))
                     .scaledFont(32, weight: .bold, relativeTo: .largeTitle)
-                    .monospacedDigit().foregroundStyle(Theme.signColor(net))
+                    .monospacedDigit().foregroundStyle(Theme.headlineColor(net, colorScheme))
                     .lineLimit(1).minimumScaleFactor(0.5)
                     .contentTransition(.numericText())
             }

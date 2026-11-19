@@ -8,6 +8,11 @@ struct InvestmentsView: View {
     @State private var showHoldingEditor = false
     @State private var showRates = false
     @State private var selectedAngle: Double?
+    @State private var debugShowDividends = false
+    @State private var debugShowPortfolio = false
+    @AppStorage("investments.expanded.trading212") private var showTrading212 = false
+    @AppStorage("investments.expanded.binance") private var showBinance = false
+    @AppStorage("investments.expanded.manual") private var showManual = false
     @Query private var quotes: [MarketQuote]
     @Environment(MarketDataService.self) private var market
     @Environment(Trading212Service.self) private var trading212
@@ -28,10 +33,39 @@ struct InvestmentsView: View {
                                            symbol: "chart.pie", actionTitle: "Add Investment") { showHoldingEditor = true }
                         } else {
                             if engine.hasAnyPositions { allocationCard(engine) }
+                            PortfolioMapCard(engine: engine).id("map")
                             PortfolioPerformanceCard(engine: engine).id("performance")
-                            Trading212PortfolioCard(engine: engine)
-                            BinancePortfolioCard(engine: engine)
-                            if !engine.positions.isEmpty { holdingsList(engine) }
+                            // Accounts: one line each, tap to expand the full list.
+                            if engine.broker.snapshot != nil {
+                                CollapsibleSection(title: "Trading 212",
+                                                   subtitle: "\(engine.brokerPositions.count) positions · Cash \(MoneyFormat.string(engine.brokerCashBase ?? 0, code: baseCurrency, fractionDigits: 0))",
+                                                   value: MoneyFormat.string(engine.brokerTotalBase, code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showTrading212) {
+                                    IconBadge(symbol: "building.columns.fill", color: .blue, size: 38)
+                                } content: {
+                                    Trading212PortfolioCard(engine: engine, embedded: true)
+                                }
+                                .id("trading212")
+                            }
+                            if engine.binance.snapshot != nil {
+                                CollapsibleSection(title: "Binance", subtitle: "\(engine.binanceAssets.count) assets",
+                                                   value: MoneyFormat.string(engine.binanceTotalBase, code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showBinance) {
+                                    IconBadge(symbol: "bitcoinsign.circle.fill", color: .orange, size: 38)
+                                } content: {
+                                    BinancePortfolioCard(engine: engine, embedded: true)
+                                }
+                            }
+                            if !engine.positions.isEmpty {
+                                let counted = engine.positions.filter { engine.countedVia($0.holding) == nil }
+                                CollapsibleSection(title: "Manual Holdings", subtitle: "\(engine.positions.count) holding\(engine.positions.count == 1 ? "" : "s")",
+                                                   value: MoneyFormat.string(counted.compactMap(\.marketValueBase).reduce(0, +), code: baseCurrency, fractionDigits: 0),
+                                                   isExpanded: $showManual) {
+                                    IconBadge(symbol: "hand.point.up.left.fill", color: .indigo, size: 38)
+                                } content: {
+                                    holdingsRows(engine)
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -39,14 +73,27 @@ struct InvestmentsView: View {
                 }
                 #if DEBUG
                 .onAppear {
-                    // Development aid: `-UIScrollTo performance` for visual checks.
-                    if ProcessInfo.processInfo.arguments.contains("-UIScrollTo") {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo("performance", anchor: .center) }
+                    // Development aid: `-UIScrollTo <performance|dividends>` and `-UIScreen dividends` for visual checks.
+                    let arguments = ProcessInfo.processInfo.arguments
+                    if let index = arguments.firstIndex(of: "-UIScrollTo") {
+                        let target = index + 1 < arguments.count ? arguments[index + 1] : "performance"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scroller.scrollTo(target, anchor: .center) }
+                    }
+                    if app.debugScreen == "dividends" || app.debugScreen == "portfolio" {
+                        let portfolio = app.debugScreen == "portfolio"
+                        app.debugScreen = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                            if portfolio { debugShowPortfolio = true } else { debugShowDividends = true }
+                        }
                     }
                 }
                 #endif
                 }
                 .screenBackground()
+                #if DEBUG
+                .navigationDestination(isPresented: $debugShowDividends) { DividendsView(engine: engine) }
+                .navigationDestination(isPresented: $debugShowPortfolio) { PortfolioDetailView(engine: engine) }
+                #endif
                 .refreshable {
                     if !app.isDemoMode {
                         async let broker: Void = refreshTrading212()
@@ -193,9 +240,8 @@ struct InvestmentsView: View {
         return nil
     }
 
-    private func holdingsList(_ engine: FinanceEngine) -> some View {
+    private func holdingsRows(_ engine: FinanceEngine) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader("Holdings")
             VStack(spacing: 0) {
                 let sorted = engine.positions.sorted { ($0.marketValueBase ?? 0) > ($1.marketValueBase ?? 0) }
                 let quoteIndex = Dictionary(quotes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
@@ -211,7 +257,6 @@ struct InvestmentsView: View {
                     if position.id != sorted.last?.id { Divider() }
                 }
             }
-            .card(padding: 14)
         }
     }
 }
@@ -223,9 +268,16 @@ struct HoldingRow: View {
     /// The external source (Trading 212 / Binance) the user said already counts this holding.
     var countedVia: String?
 
+    /// US stocks and ETFs by plain symbol ("AAPL" → "AAPL_US_EQ"); others show their letters.
+    private var logoTicker: String? {
+        let holding = position.holding
+        guard holding.assetClass == .stock || holding.assetClass == .etf, !holding.symbol.isEmpty, !holding.symbol.contains(".") else { return nil }
+        return "\(holding.symbol.uppercased())_US_EQ"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            IconBadge(symbol: position.holding.assetClass.symbol, color: Theme.color(named: position.holding.assetClass.colorName))
+            TickerLogo(ticker: logoTicker, symbol: position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol, size: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text(position.holding.symbol.isEmpty ? position.holding.name : position.holding.symbol)
                     .font(.body.weight(.semibold))

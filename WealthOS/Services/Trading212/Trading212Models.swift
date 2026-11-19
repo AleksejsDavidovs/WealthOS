@@ -101,3 +101,103 @@ final class BrokerLink {
 
     var kind: Kind { Kind(rawValue: kindRaw) ?? .holding }
 }
+
+/// One paid-out dividend from `GET /equity/history/dividends`. Keyed by Trading 212's own
+/// `reference`, so repeated syncs update instead of duplicating. Informational only: the cash
+/// is already part of the account's cash balance, so dividends never change net worth.
+@Model
+final class BrokerDividend {
+    var id: UUID = UUID()
+    /// Stable provider key (`reference`, or a derived key when the API omits it).
+    var key: String = ""
+    var ticker: String = ""
+    var name: String = ""
+    /// Net amount in the account currency (`currencyCode`).
+    var amount: Decimal = 0
+    var currencyCode: String = ""
+    var paidOn: Date = Date()
+    var quantity: Decimal?
+    /// Gross per share, in the instrument currency.
+    var grossPerShare: Decimal?
+    var instrumentCurrency: String = ""
+    var type: String = ""
+    var syncedAt: Date = Date()
+
+    init(key: String, syncedAt: Date) {
+        self.key = key
+        self.syncedAt = syncedAt
+    }
+
+    var displaySymbol: String { Trading212Matching.baseSymbol(ofTicker: ticker) }
+}
+
+/// One executed fill from `GET /equity/history/orders` (read-only history). Keyed by the
+/// provider's fill/order id, so repeated syncs never duplicate. Informational: holdings and cash
+/// already come from the live snapshot, so trades never change net worth.
+@Model
+final class BrokerOrder {
+    var id: UUID = UUID()
+    var key: String = ""
+    var ticker: String = ""
+    var name: String = ""
+    /// "BUY" or "SELL".
+    var side: String = ""
+    var quantity: Decimal = 0
+    /// Per share, in the instrument currency.
+    var price: Decimal?
+    var instrumentCurrency: String = ""
+    /// Cash moved, as a positive amount in the account currency (`currencyCode`).
+    var netValue: Decimal = 0
+    /// Taxes and fees charged on the fill (account currency).
+    var fees: Decimal = 0
+    /// Realized profit/loss of a sale (account currency); 0 for buys.
+    var realized: Decimal = 0
+    var currencyCode: String = ""
+    var filledAt: Date = Date()
+    var syncedAt: Date = Date()
+
+    init(key: String, syncedAt: Date) {
+        self.key = key
+        self.syncedAt = syncedAt
+    }
+
+    var isBuy: Bool { side.uppercased() == "BUY" }
+    var displaySymbol: String { Trading212Matching.baseSymbol(ofTicker: ticker) }
+}
+
+/// A deposit, withdrawal, fee, transfer or interest payment from `GET /equity/history/transactions`.
+@Model
+final class BrokerCashTransaction {
+    var id: UUID = UUID()
+    var key: String = ""
+    /// DEPOSIT, WITHDRAW, FEE, TRANSFER, INTEREST_ON_FREE_CASH, LENDING_INTEREST.
+    var type: String = ""
+    /// Signed: money into the account is positive, out is negative.
+    var amount: Decimal = 0
+    var currencyCode: String = ""
+    var date: Date = Date()
+    var syncedAt: Date = Date()
+
+    init(key: String, syncedAt: Date) {
+        self.key = key
+        self.syncedAt = syncedAt
+    }
+}
+
+/// The Trading 212 account's value (cash + positions) once per day, recorded on sync. The
+/// provider has no value history, so the "worth" line starts on the first synced day.
+@Model
+final class BrokerValuePoint {
+    var id: UUID = UUID()
+    var date: Date = Date()
+    var currencyCode: String = ""
+    var value: Decimal = 0
+    var cash: Decimal = 0
+
+    init(date: Date, currencyCode: String, value: Decimal, cash: Decimal) {
+        self.date = date
+        self.currencyCode = currencyCode
+        self.value = value
+        self.cash = cash
+    }
+}

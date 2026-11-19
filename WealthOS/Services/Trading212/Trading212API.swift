@@ -3,7 +3,7 @@ import Foundation
 // Trading 212 Public API (beta), per https://docs.trading212.com/api
 // - Auth: HTTP Basic, base64("API_KEY:API_SECRET").
 // - Only Invest and Stocks ISA accounts; all values in the account's primary currency.
-// WealthOS uses three read-only GET endpoints and nothing else.
+// WealthOS uses six read-only GET endpoints and nothing else.
 
 nonisolated enum Trading212Environment: String, CaseIterable, Identifiable, Sendable {
     case live, demo
@@ -37,6 +37,9 @@ nonisolated enum Trading212Endpoint: String, CaseIterable, Sendable {
     case accountSummary = "/equity/account/summary"   // 1 req / 5 s
     case positions = "/equity/positions"              // 1 req / 1 s
     case instruments = "/equity/metadata/instruments" // 1 req / 50 s
+    case dividends = "/equity/history/dividends"      // 20 req / 1 min, paginated; scope history:dividends
+    case orders = "/equity/history/orders"            // 20 req / 1 min, paginated; scope history:orders (read-only history)
+    case transactions = "/equity/history/transactions" // 20 req / 1 min, paginated; scope history:transactions
 
     var path: String { rawValue }
 }
@@ -135,6 +138,108 @@ nonisolated struct T212Instrument: Decodable, Sendable {
     var type: String?
 }
 
+nonisolated struct T212DividendPage: Decodable, Sendable {
+    var items: [T212Dividend]?
+    var nextPagePath: String?
+}
+
+nonisolated struct T212Dividend: Decodable, Sendable {
+    struct Instrument: Decodable, Sendable {
+        var currency: String?
+        var isin: String?
+        var name: String?
+        var ticker: String?
+    }
+    /// In the account's primary currency (`currency`).
+    var amount: Decimal?
+    var currency: String?
+    var grossAmountPerShare: Decimal?
+    var instrument: Instrument?
+    var paidOn: String?
+    var quantity: Decimal?
+    var reference: String?
+    var ticker: String?
+    var tickerCurrency: String?
+    var type: String?
+}
+
+nonisolated struct T212OrderPage: Decodable, Sendable {
+    var items: [T212HistoricalOrder]?
+    var nextPagePath: String?
+}
+
+nonisolated struct T212HistoricalOrder: Decodable, Sendable {
+    struct Order: Decodable, Sendable {
+        var id: Int64?
+        var createdAt: String?
+        var currency: String?
+        var filledQuantity: Decimal?
+        var filledValue: Decimal?
+        var instrument: T212Dividend.Instrument?
+        var side: String?
+        var status: String?
+        var ticker: String?
+        var type: String?
+    }
+    struct Tax: Decodable, Sendable {
+        var currency: String?
+        var name: String?
+        var quantity: Decimal?
+    }
+    struct WalletImpact: Decodable, Sendable {
+        var currency: String?
+        var fxRate: Decimal?
+        var netValue: Decimal?
+        var realisedProfitLoss: Decimal?
+        var taxes: [Tax]?
+    }
+    struct Fill: Decodable, Sendable {
+        var id: Int64?
+        var filledAt: String?
+        var price: Decimal?
+        var quantity: Decimal?
+        var type: String?
+        var walletImpact: WalletImpact?
+    }
+    var order: Order?
+    var fill: Fill?
+}
+
+nonisolated struct T212TransactionPage: Decodable, Sendable {
+    var items: [T212Transaction]?
+    var nextPagePath: String?
+}
+
+nonisolated struct T212Transaction: Decodable, Sendable {
+    var amount: Decimal?
+    var currency: String?
+    var dateTime: String?
+    var reference: String?
+    var type: String?
+
+    enum CodingKeys: String, CodingKey { case amount, currency, dateTime, reference, type }
+
+    init(amount: Decimal?, currency: String?, dateTime: String?, reference: String?, type: String?) {
+        self.amount = amount
+        self.currency = currency
+        self.dateTime = dateTime
+        self.reference = reference
+        self.type = type
+    }
+
+    /// Beta API: tolerate numbers sent as strings and ids sent as numbers instead of failing the page.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = (try? c.decodeIfPresent(Decimal.self, forKey: .amount))
+            ?? (try? c.decodeIfPresent(String.self, forKey: .amount)).flatMap { $0.flatMap { Decimal(string: $0, locale: Locale(identifier: "en_US_POSIX")) } }
+        currency = try? c.decodeIfPresent(String.self, forKey: .currency)
+        dateTime = try? c.decodeIfPresent(String.self, forKey: .dateTime)
+        reference = (try? c.decodeIfPresent(String.self, forKey: .reference))
+            ?? (try? c.decodeIfPresent(Int64.self, forKey: .reference)).flatMap { $0.map(String.init) }
+        type = try? c.decodeIfPresent(String.self, forKey: .type)
+    }
+}
+
 // MARK: - Transport
 
 /// URLSession transport that can only send authenticated GETs to the two Trading 212 API
@@ -202,8 +307,10 @@ nonisolated struct Trading212Client: Sendable {
     var sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
     var now: @Sendable () -> Date = { .now }
 
-    func request(for endpoint: Trading212Endpoint) -> URLRequest {
-        var request = URLRequest(url: URL(string: environment.baseURL + endpoint.path)!,
+    func request(for endpoint: Trading212Endpoint, query: [URLQueryItem] = []) -> URLRequest {
+        var components = URLComponents(string: environment.baseURL + endpoint.path)!
+        if !query.isEmpty { components.queryItems = query }
+        var request = URLRequest(url: components.url!,
                                  cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         request.httpMethod = "GET"
         request.setValue(credentials.authorizationHeader, forHTTPHeaderField: "Authorization")
@@ -215,9 +322,52 @@ nonisolated struct Trading212Client: Sendable {
     func positions() async throws -> [T212Position] { try await fetch(.positions) }
     func instruments() async throws -> [T212Instrument] { try await fetch(.instruments) }
 
+    /// One page of paid-out dividends, newest first. `cursor` comes from the previous page's
+    /// `nextPagePath`; only that value is taken from it — the request is always built here.
+    func dividends(cursor: String?) async throws -> T212DividendPage {
+        try await fetch(.dividends, query: Self.pageQuery(cursor))
+    }
+
+    /// Filled and cancelled orders with their fills (history only — WealthOS never places orders).
+    func orders(cursor: String?) async throws -> T212OrderPage {
+        try await fetch(.orders, query: Self.pageQuery(cursor))
+    }
+
+    /// Deposits, withdrawals, fees, transfers and interest. `next` is the previous page's
+    /// `nextPagePath`: its `cursor` and `time` values are carried over (both validated).
+    func transactions(next: String?) async throws -> T212TransactionPage {
+        try await fetch(.transactions, query: Self.pageQuery(nextPagePath: next))
+    }
+
+    static func pageQuery(_ cursor: String?) -> [URLQueryItem] {
+        var query = [URLQueryItem(name: "limit", value: "50")]
+        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        return query
+    }
+
+    /// limit=50 plus the validated `cursor` and `time` of a `nextPagePath`; nothing else is copied.
+    static func pageQuery(nextPagePath: String?) -> [URLQueryItem] {
+        var query = pageQuery(cursor(fromNextPagePath: nextPagePath))
+        if let time = URLComponents(string: nextPagePath ?? "")?.queryItems?.first(where: { $0.name == "time" })?.value,
+           !time.isEmpty, time.count <= 40, time.allSatisfy({ $0.isASCII && ($0.isNumber || "-:.TZ+".contains($0)) }) {
+            query.append(URLQueryItem(name: "time", value: time))
+        }
+        return query
+    }
+
+    /// The `cursor` value of a `nextPagePath` such as "/api/v0/equity/history/dividends?limit=50&cursor=123".
+    /// Only that value is used (the path and host are ignored); it must be a short plain token.
+    static func cursor(fromNextPagePath path: String?) -> String? {
+        guard let path, let items = URLComponents(string: path)?.queryItems,
+              let value = items.first(where: { $0.name == "cursor" })?.value,
+              !value.isEmpty, value.count <= 200,
+              value.allSatisfy({ ($0.isASCII && ($0.isLetter || $0.isNumber)) || "-_.:+=".contains($0) }) else { return nil }
+        return value
+    }
+
     /// Retries 408/5xx/timeouts with exponential backoff (1 s, 2 s) and honours Retry-After /
     /// x-ratelimit-reset on 429. 401/403 are never retried.
-    func fetch<T: Decodable>(_ endpoint: Trading212Endpoint) async throws -> T {
+    func fetch<T: Decodable>(_ endpoint: Trading212Endpoint, query: [URLQueryItem] = []) async throws -> T {
         var attempt = 0
         while true {
             attempt += 1
@@ -225,7 +375,7 @@ nonisolated struct Trading212Client: Sendable {
             let data: Data
             let response: HTTPURLResponse
             do {
-                (data, response) = try await http.get(request(for: endpoint))
+                (data, response) = try await http.get(request(for: endpoint, query: query))
             } catch let error as Trading212Error {
                 throw error
             } catch let error as URLError {
